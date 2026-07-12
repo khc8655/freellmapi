@@ -185,31 +185,38 @@ function buildGeminiThinkingConfig(effort, modelId) {
   if (!normalized.includes('gemini')) {
     return null;
   }
-  
-  // Gemini 2.5 does not support thinkingLevel parameter, only includeThoughts
-  if (normalized.includes('gemini-2.5')) {
+
+  // If user explicitly requests to disable thoughts
+  if (effort === 'none') {
     return { includeThoughts: false };
+  }
+
+  const includeThoughts = true;
+  
+  // Gemini 2.5: only supports includeThoughts, no thinkingLevel
+  if (normalized.includes('gemini-2.5')) {
+    return { includeThoughts };
   }
 
   // Gemini 3.0 / 3.1 Flash and Pro support thinkingConfig
   if (normalized.includes('gemini-3')) {
     const level = effort || 'medium';
     if (normalized.includes('pro')) {
-      // 3.0 Pro supports only high or low, clamp medium to low
+      // 3.0 Pro supports only high or low
       return {
-        includeThoughts: false,
+        includeThoughts,
         thinkingLevel: level === 'high' ? 'high' : 'low'
       };
     }
     // 3.0/3.1 Flash supports low, medium, high
     return {
-      includeThoughts: false,
+      includeThoughts,
       thinkingLevel: level
     };
   }
 
-  // For future or older versions, default to safe includeThoughts: false
-  return { includeThoughts: false };
+  // For future or older versions, default to includeThoughts: true
+  return { includeThoughts };
 }
 
 function fetchImage(imageUrl) {
@@ -339,11 +346,13 @@ function translateGeminiResponse(geminiData, modelId) {
   const parts = candidate?.content?.parts || [];
   
   let text = '';
+  let reasoningText = '';
   const toolCalls = [];
   
   parts.forEach((p, idx) => {
-    // Defense: Discard thinking blocks from entering the content parameter
+    // Extract thinking blocks
     if (p.thought === true) {
+      if (p.text) reasoningText += p.text;
       return;
     }
     if (p.text) text += p.text;
@@ -373,6 +382,7 @@ function translateGeminiResponse(geminiData, modelId) {
       message: {
         role: 'assistant',
         content: text || null,
+        ...(reasoningText ? { reasoning_content: reasoningText } : {}),
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {})
       },
       finish_reason: toolCalls.length > 0 ? 'tool_calls' : (candidate?.finishReason === 'MAX_TOKENS' ? 'length' : 'stop')
