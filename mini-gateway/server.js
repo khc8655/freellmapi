@@ -727,7 +727,7 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
     path: parsedUrl.path,
     method: 'POST',
     headers: headers,
-    timeout: 15000 // Set a strict 15-second timeout for first-byte response
+    timeout: 45000 // Set a strict 45-second timeout for first-byte response
   };
 
   let hasResponded = false;
@@ -808,8 +808,8 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
   // Handle Timeout
   upstreamReq.on('timeout', () => {
     if (hasResponded) return;
-    console.warn(`[Proxy] Upstream provider ${provider.name} request timed out after 15 seconds.`);
-    upstreamReq.destroy(new Error('Gateway Timeout (15s)'));
+    console.warn(`[Proxy] Upstream provider ${provider.name} request timed out after 45 seconds.`);
+    upstreamReq.destroy(new Error('Gateway Timeout (45s)'));
   });
 
   // Clean up upstream connection if the client aborts their request
