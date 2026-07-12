@@ -726,10 +726,14 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
     port: parsedUrl.port || 443,
     path: parsedUrl.path,
     method: 'POST',
-    headers: headers
+    headers: headers,
+    timeout: 15000 // Set a strict 15-second timeout for first-byte response
   };
 
+  let hasResponded = false;
+
   const upstreamReq = https.request(options, (upstreamRes) => {
+    hasResponded = true;
     const statusCode = upstreamRes.statusCode;
 
     // Handle Success Response
@@ -801,6 +805,21 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
     });
   });
 
+  // Handle Timeout
+  upstreamReq.on('timeout', () => {
+    if (hasResponded) return;
+    console.warn(`[Proxy] Upstream provider ${provider.name} request timed out after 15 seconds.`);
+    upstreamReq.destroy(new Error('Gateway Timeout (15s)'));
+  });
+
+  // Clean up upstream connection if the client aborts their request
+  req.on('close', () => {
+    if (!hasResponded) {
+      console.log(`[Proxy] Client disconnected early. Aborting upstream request for ${provider.name}.`);
+      upstreamReq.destroy();
+    }
+  });
+
   upstreamReq.on('error', (err) => {
     console.error(`[Proxy] Connection error to ${provider.name}:`, err.message);
     if (isRetryableError(500, err.message) && attempt < maxAttempts) {
@@ -809,8 +828,11 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
       forwardRequest(req, res, provider, bodyStr, attempt + 1, isStream, model);
     } else {
       stats.errors++;
-      res.writeHead(502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: `Bad Gateway: connection failed to upstream provider. ${err.message}` } }));
+      // Check if headers have already been sent to prevent crash
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `Bad Gateway: connection failed to upstream provider. ${err.message}` } }));
+      }
     }
   });
 
@@ -989,8 +1011,13 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. OpenAI Models (GET /v1/models or GET /models)
-  if (req.method === 'GET' && (parsedUrl.pathname === '/v1/models' || parsedUrl.pathname === '/models')) {
+  // 2. OpenAI Models (GET /v1/models or GET /models or GET /api/v1/models or GET /api/tags)
+  const isModelsPath = parsedUrl.pathname === '/v1/models' || 
+                       parsedUrl.pathname === '/models' || 
+                       parsedUrl.pathname === '/api/v1/models' || 
+                       parsedUrl.pathname === '/api/tags';
+
+  if (req.method === 'GET' && isModelsPath) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       object: 'list',
