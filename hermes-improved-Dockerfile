@@ -1,0 +1,159 @@
+# 最终定型生产镜像 - 改进版轻量化资产双向无状态同步方案
+ARG HERMES_IMAGE_TAG=latest
+FROM nousresearch/hermes-agent:${HERMES_IMAGE_TAG}
+
+ENV HERMES_DASHBOARD=1 \
+    HERMES_DASHBOARD_HOST=0.0.0.0 \
+    HERMES_DASHBOARD_PORT=7860 \
+    HOME=/opt/data
+
+EXPOSE 7860
+
+# ============================================================================
+# 1. 基础补丁层（与原版相同，略过注释）
+# ============================================================================
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/main-hermes && \
+    printf '#!/bin/sh\nexec sleep infinity\n' > /etc/s6-overlay/s6-rc.d/main-hermes/run && \
+    chmod +x /etc/s6-overlay/s6-rc.d/main-hermes/run && \
+    python - <<'PY'
+from pathlib import Path
+routes = Path("/opt/hermes/hermes_cli/dashboard_auth/routes.py")
+if routes.exists():
+    s = routes.read_text()
+    old = "    try:\n        ls = p.start_login(redirect_uri=_redirect_uri(request))\n    except ProviderError as e:"
+    new = f'''    try:
+        ls = p.start_login(redirect_uri=_redirect_uri(request))
+    except NotImplementedError as exc:
+        if "password-only" not in str(exc): raise
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/login", status_code=303)
+    except ProviderError as e:'''
+    if old in s: routes.write_text(s.replace(old, new, 1))
+
+middleware = Path("/opt/hermes/hermes_cli/dashboard_auth/middleware.py")
+if middleware.exists():
+    s = middleware.read_text()
+    old = '''    provider = providers[0]\n    prefix = prefix_from_request(request)\n    next_param = _safe_next_target(request)'''
+    new = f'''    provider = providers[0]\n    if getattr(provider, "supports_password", False): return None\n    prefix = prefix_from_request(request)\n    next_param = _safe_next_target(request)'''
+    if old in s: middleware.write_text(s.replace(old, new, 1))
+PY
+
+# ============================================================================
+# 2. 启动时恢复（cont-init.d） —— 只做入向拉取，不注册 trap/后台循环
+# ============================================================================
+RUN mkdir -p /etc/cont-init.d && cat > /etc/cont-init.d/99-hf-restore <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+LOCAL_SOURCE="/opt/data"
+BACKUP_DIR="/data/hermes_stateless_backup"
+
+mkdir -p /opt/data/.cache /opt/data/.config /opt/data/.local/share /opt/data/logs
+
+# 入向恢复：直接复制，不需要中转目录（恢复阶段目标目录是空的，无需原子性）
+if [ -d /data ] && [ -f "$BACKUP_DIR/config.yaml" ]; then
+    echo "[HF-Sync] Found backup. Restoring configuration..."
+    cp -r --no-preserve=ownership "$BACKUP_DIR/." "$LOCAL_SOURCE/"
+    echo "[HF-Sync] Configuration restored successfully."
+else
+    echo "[HF-Sync] No backup found — starting fresh."
+fi
+
+chown -R hermes:hermes /opt/data /data 2>/dev/null || true
+SH
+RUN chmod +x /etc/cont-init.d/99-hf-restore
+
+# ============================================================================
+# 3. 持久化同步守护服务（s6 长生命周期服务）
+#    ← 关键改进：作为 s6 service 运行，而非 cont-init.d 的后台子 shell
+#    这样 SIGTERM 能正确传递，trap 能正确触发
+# ============================================================================
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/hf-sync-daemon && \
+    printf 'longrun\n' > /etc/s6-overlay/s6-rc.d/hf-sync-daemon/type && \
+    mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d && \
+    touch /etc/s6-overlay/s6-rc.d/user/contents.d/hf-sync-daemon
+
+RUN cat > /etc/s6-overlay/s6-rc.d/hf-sync-daemon/run <<'DAEMON'
+#!/usr/bin/env bash
+set -euo pipefail
+
+LOCAL_SOURCE="/opt/data"
+BACKUP_DIR="/data/hermes_stateless_backup"
+STAGING_DIR="/data/.hermes_staging"
+
+# ---- 核心同步函数 ----
+_execute_sync() {
+    [ -d /data ] || return 0
+    [ -f "$LOCAL_SOURCE/config.yaml" ] || return 0
+
+    echo "[HF-Sync] Starting backup cycle..."
+    rm -rf "$STAGING_DIR" && mkdir -p "$STAGING_DIR"
+
+    # 1. 建立快照
+    cp -r --no-preserve=ownership "$LOCAL_SOURCE/." "$STAGING_DIR/" 2>/dev/null || true
+
+    # 2. 清洗垃圾（缓存、日志、锁文件）
+    rm -rf "$STAGING_DIR/logs" \
+           "$STAGING_DIR/.cache" \
+           "$STAGING_DIR/cache" \
+           "$STAGING_DIR/audio_cache" \
+           "$STAGING_DIR/image_cache" \
+           "$STAGING_DIR/lazy-packages" \
+           "$STAGING_DIR/incoming_tmp" \
+           "$STAGING_DIR/home/.cache" 2>/dev/null || true
+
+    rm -f "$STAGING_DIR/models_dev_cache.json" \
+          "$STAGING_DIR/ollama_cloud_models_cache.json" \
+          "$STAGING_DIR/provider_models_cache.json" \
+          "$STAGING_DIR/"*.lock \
+          "$STAGING_DIR/"*.pid \
+          "$STAGING_DIR/config.yaml.bak-"* 2>/dev/null || true
+
+    # 3. SQLite WAL 安全处理：合并 WAL 到主文件，而不是删除 WAL
+    for db_file in "$STAGING_DIR/"*.db; do
+        [ -f "$db_file" ] || continue
+        # PRAGMA wal_checkpoint(TRUNCATE) 把 WAL 内容合并进主 .db，然后清空 WAL
+        sqlite3 "$db_file" "PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null || true
+        rm -f "${db_file}-shm" "${db_file}-wal" 2>/dev/null || true
+    done
+
+    # 4. 原子替换备份（先改名旧的，再 mv 新的，最后删旧的）
+    if [ -f "$STAGING_DIR/config.yaml" ]; then
+        mv "$BACKUP_DIR" "${BACKUP_DIR}.old" 2>/dev/null || true
+        mv "$STAGING_DIR" "$BACKUP_DIR"
+        rm -rf "${BACKUP_DIR}.old"
+        echo "[HF-Sync] ✓ Backup synced to persistent storage."
+    fi
+    rm -rf "$STAGING_DIR"
+}
+
+# ---- SIGTERM 拦截：容器被杀前紧急保存 ----
+_on_term() {
+    echo "[HF-Sync] SIGTERM received — emergency sync..."
+    _execute_sync || true
+    exit 0
+}
+trap _on_term SIGTERM SIGINT
+
+# ---- 主循环 ----
+echo "[HF-Sync] Daemon started. First sync in 600s, then every 7200s."
+sleep 600 &
+wait $!   # 可被 signal 中断的 sleep
+
+while true; do
+    _execute_sync || true
+    sleep 7200 &
+    wait $!   # 可被 signal 中断的 sleep
+done
+DAEMON
+RUN chmod +x /etc/s6-overlay/s6-rc.d/hf-sync-daemon/run
+
+# s6 优雅停止脚本（给 daemon 发 SIGTERM 而不是直接 SIGKILL）
+RUN cat > /etc/s6-overlay/s6-rc.d/hf-sync-daemon/finish <<'FINISH'
+#!/usr/bin/env bash
+echo "[HF-Sync] Daemon exited with code $1."
+FINISH
+RUN chmod +x /etc/s6-overlay/s6-rc.d/hf-sync-daemon/finish
+
+ENTRYPOINT ["/init"]
+CMD ["/opt/hermes/docker/main-wrapper.sh", "gateway", "run"]

@@ -1,0 +1,13 @@
+# Secret and configuration files
+config.md
+mini-gateway/config.md
+.env
+mini-gateway/.env
+
+# Temporary and local folders
+scratch/
+tmp/
+.DS_Store
+node_modules/
+*.log
+freellmapi-src/
