@@ -30,6 +30,7 @@ try {
 const GOOGLE_KEYS = (process.env.GOOGLE_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
 const NVIDIA_KEYS = (process.env.NVIDIA_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
 const CUSTOM_KEYS = (process.env.CUSTOM_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+const OPENCODE_KEYS = (process.env.OPENCODE_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
 
 const CUSTOM_ENDPOINT = process.env.CUSTOM_ENDPOINT || '';
 const CUSTOM_MODELS = (process.env.CUSTOM_MODELS || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
@@ -51,6 +52,7 @@ const PORT = process.env.PORT || 7860;
 let googleKeyIndex = 0;
 let nvidiaKeyIndex = 0;
 let customKeyIndex = 0;
+let opencodeKeyIndex = 0;
 
 // Statistics
 const stats = {
@@ -569,6 +571,19 @@ function selectProvider(modelName) {
     };
   }
   
+  // 2.5. OpenCode Routing
+  if (model === 'deepseek-v4-flash-free' && OPENCODE_KEYS.length > 0) {
+    return {
+      name: 'opencode',
+      url: 'https://console.opencode.ai/inference/openai/v1/chat/completions',
+      keySelector: {
+        getKey: () => OPENCODE_KEYS[opencodeKeyIndex],
+        rotate: () => { opencodeKeyIndex = (opencodeKeyIndex + 1) % OPENCODE_KEYS.length; },
+        length: OPENCODE_KEYS.length
+      }
+    };
+  }
+  
   // 3. Nvidia NIM Routing (Catch-all for all other models if Nvidia keys are set)
   // Since Gemini is handled explicitly, and Custom is handled by explicit listing,
   // everything else goes to Nvidia NIM (which hosts all organization-prefixed models like minimaxai/, meta/, z-ai/, microsoft/, qwen/ etc.)
@@ -630,6 +645,9 @@ function getAvailableModelsList() {
       { id: 'deepseek/deepseek-r1', object: 'model', created: 1718000000, owned_by: 'nvidia' }
     );
   }
+  if (OPENCODE_KEYS.length > 0) {
+    models.push({ id: 'deepseek-v4-flash-free', object: 'model', created: 1718000000, owned_by: 'opencode' });
+  }
   CUSTOM_MODELS.forEach(m => {
     models.push({ id: m, object: 'model', created: 1718000000, owned_by: 'custom' });
   });
@@ -644,7 +662,7 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
   const apiKey = keySelector.getKey();
   const maxAttempts = keySelector.length;
 
-  console.log(`[Proxy] Forwarding attempt ${attempt}/${maxAttempts} for ${provider.name} (using key index ${provider.name === 'google' ? googleKeyIndex : provider.name === 'nvidia' ? nvidiaKeyIndex : customKeyIndex})`);
+  console.log(`[Proxy] Forwarding attempt ${attempt}/${maxAttempts} for ${provider.name} (using key index ${provider.name === 'google' ? googleKeyIndex : provider.name === 'nvidia' ? nvidiaKeyIndex : provider.name === 'opencode' ? opencodeKeyIndex : customKeyIndex})`);
 
   let finalUrl = provider.url;
   let finalBodyStr = bodyStr;
@@ -1021,6 +1039,7 @@ const server = http.createServer((req, res) => {
       // Update counters
       if (provider.name === 'google') stats.googleRequests++;
       else if (provider.name === 'nvidia') stats.nvidiaRequests++;
+      else if (provider.name === 'opencode') stats.customRequests++;
       else if (provider.name === 'custom') stats.customRequests++;
 
       const isStream = bodyObj.stream === true;
