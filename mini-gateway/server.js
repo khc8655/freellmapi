@@ -575,7 +575,7 @@ function selectProvider(modelName) {
   if (model === 'deepseek-v4-flash-free' && OPENCODE_KEYS.length > 0) {
     return {
       name: 'opencode',
-      url: 'https://console.opencode.ai/inference/openai/v1/chat/completions',
+      url: 'https://opencode.ai/zen/v1/chat/completions',
       keySelector: {
         getKey: () => OPENCODE_KEYS[opencodeKeyIndex],
         rotate: () => { opencodeKeyIndex = (opencodeKeyIndex + 1) % OPENCODE_KEYS.length; },
