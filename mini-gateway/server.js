@@ -31,6 +31,7 @@ const GOOGLE_KEYS = (process.env.GOOGLE_KEYS || '').split(',').map(k => k.trim()
 const NVIDIA_KEYS = (process.env.NVIDIA_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
 const CUSTOM_KEYS = (process.env.CUSTOM_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
 const OPENCODE_KEYS = (process.env.OPENCODE_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+const AGNES_KEYS = (process.env.AGNES_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
 
 const CUSTOM_ENDPOINT = process.env.CUSTOM_ENDPOINT || '';
 const CUSTOM_MODELS = (process.env.CUSTOM_MODELS || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
@@ -53,6 +54,7 @@ let googleKeyIndex = 0;
 let nvidiaKeyIndex = 0;
 let customKeyIndex = 0;
 let opencodeKeyIndex = 0;
+let agnesKeyIndex = 0;
 
 // Statistics
 const stats = {
@@ -594,6 +596,19 @@ function selectProvider(modelName) {
     };
   }
   
+  // 2.6. Agnes Routing
+  if (model === 'agnes-2.0-flash' && AGNES_KEYS.length > 0) {
+    return {
+      name: 'agnes',
+      url: 'https://apihub.agnes-ai.com/v1/chat/completions',
+      keySelector: {
+        getKey: () => AGNES_KEYS[agnesKeyIndex],
+        rotate: () => { agnesKeyIndex = (agnesKeyIndex + 1) % AGNES_KEYS.length; },
+        length: AGNES_KEYS.length
+      }
+    };
+  }
+  
   // 3. Nvidia NIM Routing (Catch-all for all other models if Nvidia keys are set)
   // Since Gemini is handled explicitly, and Custom is handled by explicit listing,
   // everything else goes to Nvidia NIM (which hosts all organization-prefixed models like minimaxai/, meta/, z-ai/, microsoft/, qwen/ etc.)
@@ -658,6 +673,9 @@ function getAvailableModelsList() {
   if (OPENCODE_KEYS.length > 0) {
     models.push({ id: 'deepseek-v4-flash-free', object: 'model', created: 1718000000, owned_by: 'opencode' });
   }
+  if (AGNES_KEYS.length > 0) {
+    models.push({ id: 'agnes-2.0-flash', object: 'model', created: 1718000000, owned_by: 'agnes' });
+  }
   CUSTOM_MODELS.forEach(m => {
     models.push({ id: m, object: 'model', created: 1718000000, owned_by: 'custom' });
   });
@@ -672,7 +690,7 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
   const apiKey = keySelector.getKey();
   const maxAttempts = keySelector.length;
 
-  console.log(`[Proxy] Forwarding attempt ${attempt}/${maxAttempts} for ${provider.name} (using key index ${provider.name === 'google' ? googleKeyIndex : provider.name === 'nvidia' ? nvidiaKeyIndex : provider.name === 'opencode' ? opencodeKeyIndex : customKeyIndex})`);
+  console.log(`[Proxy] Forwarding attempt ${attempt}/${maxAttempts} for ${provider.name} (using key index ${provider.name === 'google' ? googleKeyIndex : provider.name === 'nvidia' ? nvidiaKeyIndex : provider.name === 'opencode' ? opencodeKeyIndex : provider.name === 'agnes' ? agnesKeyIndex : customKeyIndex})`);
 
   let finalUrl = provider.url;
   let finalBodyStr = bodyStr;
@@ -1077,6 +1095,7 @@ const server = http.createServer((req, res) => {
       if (provider.name === 'google') stats.googleRequests++;
       else if (provider.name === 'nvidia') stats.nvidiaRequests++;
       else if (provider.name === 'opencode') stats.customRequests++;
+      else if (provider.name === 'agnes') stats.customRequests++;
       else if (provider.name === 'custom') stats.customRequests++;
 
       const isStream = bodyObj.stream === true;
@@ -1093,5 +1112,5 @@ const server = http.createServer((req, res) => {
 // Server boot
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[Proxy] Gateway server launched on port ${PORT}`);
-  console.log(`[Proxy] Configured Keys - Google: ${GOOGLE_KEYS.length} | Nvidia: ${NVIDIA_KEYS.length} | Custom: ${CUSTOM_KEYS.length}`);
+  console.log(`[Proxy] Configured Keys - Google: ${GOOGLE_KEYS.length} | Nvidia: ${NVIDIA_KEYS.length} | Custom: ${CUSTOM_KEYS.length} | OpenCode: ${OPENCODE_KEYS.length} | Agnes: ${AGNES_KEYS.length}`);
 });

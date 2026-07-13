@@ -17,6 +17,7 @@ graph TD
     Upstream -->|Gemini Models| Google[Google AI Studio]
     Upstream -->|Llama / GLM Models| Nvidia[Nvidia NIM]
     Upstream -->|DeepSeek Models| OpenCode[OpenCode Zen]
+    Upstream -->|Agnes Models| Agnes[Agnes AI]
 ```
 
 ### ⚡ Why this combination?
@@ -36,7 +37,8 @@ Configure these environment variables in your Cloud Run Service settings (under 
 | `GOOGLE_KEYS` | Comma-separated list of Google Gemini API keys. | `key1,key2,key3` |
 | `NVIDIA_KEYS` | Comma-separated list of Nvidia NIM API keys. | `key1,key2,key3` |
 | `OPENCODE_KEYS` | Comma-separated list of OpenCode Zen API keys. | `key1,key2` |
-| `EXPOSED_MODELS` | Comma-separated list of models to expose via the gateway. | `gemini-2.5-flash,gemini-3.1-flash-lite,z-ai/glm-5.2,minimaxai/minimax-m3,openai/gpt-oss-120b,stepfun-ai/step-3.7-flash,deepseek-v4-flash-free` |
+| `AGNES_KEYS` | Comma-separated list of Agnes API keys. | `key1,key2` |
+| `EXPOSED_MODELS` | Comma-separated list of models to expose via the gateway. | `gemini-2.5-flash,gemini-3.1-flash-lite,z-ai/glm-5.2,minimaxai/minimax-m3,openai/gpt-oss-120b,stepfun-ai/step-3.7-flash,deepseek-v4-flash-free,agnes-2.0-flash` |
 
 ---
 
@@ -163,5 +165,13 @@ curl -i -H "Content-Type: application/json" \
 curl -i -H "Content-Type: application/json" \
   -H "Authorization: Bearer <YOUR_ACCESS_TOKEN>" \
   -d '{"model": "deepseek-v4-flash-free", "messages": [{"role": "user", "content": "Hi."}]}' \
+  https://g.khc6.eu.cc/v1/chat/completions
+```
+
+### 4. Test Chat Completion (Agnes)
+```bash
+curl -i -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR_ACCESS_TOKEN>" \
+  -d '{"model": "agnes-2.0-flash", "messages": [{"role": "user", "content": "Hello, who are you?"}]}' \
   https://g.khc6.eu.cc/v1/chat/completions
 ```
