@@ -582,7 +582,7 @@ function selectProvider(modelName) {
   }
   
   // 2.5. OpenCode Routing
-  if (model === 'deepseek-v4-flash-free' && OPENCODE_KEYS.length > 0) {
+  if (model.endsWith('-free') && OPENCODE_KEYS.length > 0) {
     return {
       name: 'opencode',
       url: 'https://opencode.ai/zen/v1/chat/completions',
@@ -631,6 +631,7 @@ function getAvailableModelsList() {
       let ownedBy = 'custom';
       const ml = m.toLowerCase();
       if (ml.startsWith('gemini-')) ownedBy = 'google';
+      else if (ml.endsWith('-free')) ownedBy = 'opencode';
       else if (ml.includes('nvidia') || ml.startsWith('meta/') || ml.startsWith('mistralai/') || ml.startsWith('deepseek/') || ml.startsWith('google/')) ownedBy = 'nvidia';
       return { id: m, object: 'model', created: 1718000000, owned_by: ownedBy };
     });
@@ -656,7 +657,10 @@ function getAvailableModelsList() {
     );
   }
   if (OPENCODE_KEYS.length > 0) {
-    models.push({ id: 'deepseek-v4-flash-free', object: 'model', created: 1718000000, owned_by: 'opencode' });
+    models.push(
+      { id: 'deepseek-v4-flash-free', object: 'model', created: 1718000000, owned_by: 'opencode' },
+      { id: 'hy3-free', object: 'model', created: 1718000000, owned_by: 'opencode' }
+    );
   }
   CUSTOM_MODELS.forEach(m => {
     models.push({ id: m, object: 'model', created: 1718000000, owned_by: 'custom' });
