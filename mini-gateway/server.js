@@ -749,6 +749,10 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
   }
 
   const parsedUrl = url.parse(finalUrl);
+  // Explicitly set Content-Length to avoid Transfer-Encoding: chunked,
+  // which some upstream API gateways (like Agnes) do not support and will reject with a socket hang up.
+  headers['Content-Length'] = Buffer.byteLength(finalBodyStr);
+
   const options = {
     hostname: parsedUrl.hostname,
     port: parsedUrl.port || 443,
