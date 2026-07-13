@@ -40,6 +40,23 @@ Configure these environment variables in your Cloud Run Service settings (under 
 
 ---
 
+## 🔀 Routing & Error Recovery Rules
+
+The gateway implements a strict routing matching pipeline with specific handling rules for high reliability:
+
+1. **Routing Mechanics**:
+   * **Google Gemini**: Explicitly matches models starting with `gemini-` and translates payloads to the native Gemini API structure.
+   * **OpenCode Zen**: Matches models ending with `-free` (e.g., `deepseek-v4-flash-free`, `hy3-free`) and routes to the OpenCode Zen API.
+   * **Nvidia NIM**: Serves as the catch-all router for other models if Nvidia keys are set.
+   * **No Quiet Fallback**: If a model request doesn't match any active configurations, the gateway returns a clear `400 Bad Request` instead of routing it silently to Google.
+
+2. **Smart Retries & Key Rotation**:
+   * The gateway rotates API keys dynamically upon encountering retryable failures.
+   * **Retryable Errors**: Only `5xx` server errors, network connection drops, timeouts, and `408` / `429` (rate limits) will trigger a retry and rotate keys.
+   * **Non-Retryable Errors**: Bad requests (`400`), invalid tokens (`401`), forbidden access (`403`), and unknown models (`404`) return instantly to avoid wasteful key consumption and latency.
+
+---
+
 ## 🚀 Deployment Instructions
 
 ### 1. Prerequisite: Install Google Cloud SDK
