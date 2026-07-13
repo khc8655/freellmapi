@@ -96,32 +96,29 @@ function recallThoughtSig(callId) {
 // =============================================================================
 function isRetryableError(statusCode, errMessage) {
   const msg = (errMessage || '').toLowerCase();
-  
-  // Structured status check
-  if (statusCode === 408 || statusCode === 409 || statusCode === 410 || statusCode === 429 || statusCode >= 500) {
-    return true;
+
+  // 4xx client errors are definitive failures - retrying just wastes time and burns keys.
+  // 400 = bad request, 401 = unauthorized, 403 = forbidden, 404 = not found, 413 = payload too large.
+  // Only 408 (timeout) and 429 (rate limit) are retryable among 4xx.
+  if (statusCode >= 400 && statusCode < 500) {
+    return statusCode === 408 || statusCode === 429;
   }
-  
-  // Substring checks (matches FreeLLMAPI's exact retry catalog)
-  return msg.includes('429') || msg.includes('rate limit') || msg.includes('too many requests')
+
+  // All 5xx server errors are retryable
+  if (statusCode >= 500) return true;
+
+  // Network-level errors (no HTTP status code yet)
+  return msg.includes('rate limit') || msg.includes('too many requests')
     || msg.includes('quota') || msg.includes('resource_exhausted')
-    || msg.includes('aborted') || msg.includes('timeout') || msg.includes('etimedout')
+    || msg.includes('timeout') || msg.includes('etimedout')
     || msg.includes('econnrefused') || msg.includes('econnreset')
     || msg.includes('fetch failed')
-    || msg.includes('503') || msg.includes('unavailable')
-    || msg.includes('500') || msg.includes('internal server error')
-    || msg.includes('413') || msg.includes('payload too large') || msg.includes('request body too large')
-    || msg.includes('request entity too large') || msg.includes('content too large')
-    || msg.includes('404') || msg.includes('not found') || msg.includes('no endpoints found')
-    || msg.includes('410') || msg.includes('gone')
-    || msg.includes('403') || msg.includes('forbidden')
-    || msg.includes('api error 400')
-    || msg.includes('402') || msg.includes('payment required') || msg.includes('insufficient_quota') || msg.includes('insufficient credit') || msg.includes('insufficient balance')
+    || msg.includes('unavailable')
+    || msg.includes('payment required') || msg.includes('insufficient_quota')
+    || msg.includes('insufficient credit') || msg.includes('insufficient balance')
     || msg.includes('empty completion')
-    || msg.includes('in-band provider error')
     || msg.includes('stream ended unexpectedly')
-    || msg.includes('stream stalled')
-    || msg.includes('unparseable inline tool-call dialect');
+    || msg.includes('stream stalled');
 }
 
 // =============================================================================
@@ -605,19 +602,6 @@ function selectProvider(modelName) {
         getKey: () => NVIDIA_KEYS[nvidiaKeyIndex],
         rotate: () => { nvidiaKeyIndex = (nvidiaKeyIndex + 1) % NVIDIA_KEYS.length; },
         length: NVIDIA_KEYS.length
-      }
-    };
-  }
-
-  // 4. Fallback defaults (if Nvidia keys are not configured, fallback to Google)
-  if (GOOGLE_KEYS.length > 0) {
-    return {
-      name: 'google',
-      url: 'https://generativelanguage.googleapis.com/v1beta',
-      keySelector: {
-        getKey: () => GOOGLE_KEYS[googleKeyIndex],
-        rotate: () => { googleKeyIndex = (googleKeyIndex + 1) % GOOGLE_KEYS.length; },
-        length: GOOGLE_KEYS.length
       }
     };
   }
