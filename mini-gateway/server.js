@@ -249,6 +249,44 @@ function safeParseObject(raw) {
   }
 }
 
+async function extractContentParts(content) {
+  const parts = [];
+  if (!content) return parts;
+
+  if (typeof content === 'string') {
+    parts.push({ text: content });
+  } else if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!block) continue;
+      if (typeof block === 'string') {
+        parts.push({ text: block });
+      } else if (typeof block === 'object') {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          parts.push({ text: block.text });
+        } else if (block.type === 'image_url') {
+          const urlStr = typeof block.image_url === 'string' ? block.image_url : block.image_url?.url;
+          if (urlStr) {
+            try {
+              const inlineData = await fetchImage(urlStr);
+              parts.push({ inlineData });
+            } catch (err) {
+              console.error('[Proxy] Failed to fetch user image:', err.message);
+            }
+          }
+        } else if (typeof block.text === 'string') {
+          parts.push({ text: block.text });
+        }
+      }
+    }
+  } else if (typeof content === 'object') {
+    if (typeof content.text === 'string') {
+      parts.push({ text: content.text });
+    }
+  }
+
+  return parts;
+}
+
 async function toGeminiContents(messages) {
   const systemMessages = messages
     .filter(m => m.role === 'system')
@@ -265,7 +303,10 @@ async function toGeminiContents(messages) {
 
     if (m.role === 'assistant') {
       role = 'model';
-      if (m.content) parts.push({ text: m.content });
+      if (m.content) {
+        const contentParts = await extractContentParts(m.content);
+        parts.push(...contentParts);
+      }
       if (m.tool_calls) {
         m.tool_calls.forEach(tc => {
           const sig = recallThoughtSig(tc.id);
@@ -292,22 +333,9 @@ async function toGeminiContents(messages) {
       });
     } else { // user
       role = 'user';
-      if (typeof m.content === 'string') {
-        parts.push({ text: m.content });
-      } else if (Array.isArray(m.content)) {
-        for (const block of m.content) {
-          if (block.type === 'text') {
-            parts.push({ text: block.text });
-          } else if (block.type === 'image_url') {
-            const urlStr = typeof block.image_url === 'string' ? block.image_url : block.image_url.url;
-            try {
-              const inlineData = await fetchImage(urlStr);
-              parts.push({ inlineData });
-            } catch (err) {
-              console.error('[Proxy] Failed to fetch user image:', err.message);
-            }
-          }
-        }
+      if (m.content) {
+        const contentParts = await extractContentParts(m.content);
+        parts.push(...contentParts);
       }
     }
 
