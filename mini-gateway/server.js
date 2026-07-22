@@ -97,15 +97,19 @@ function recallThoughtSig(callId) {
 function isRetryableError(statusCode, errMessage) {
   const msg = (errMessage || '').toLowerCase();
 
-  // 4xx client errors are definitive failures - retrying just wastes time and burns keys.
-  // 400 = bad request, 401 = unauthorized, 403 = forbidden, 404 = not found, 413 = payload too large.
-  // Only 408 (timeout) and 429 (rate limit) are retryable among 4xx.
-  if (statusCode >= 400 && statusCode < 500) {
-    return statusCode === 408 || statusCode === 429;
+  // Key rotation errors: 401 (unauthorized), 403 (forbidden/key blocked), 408 (timeout), and 429 (rate limit)
+  // should trigger key rotation to use other valid keys in the pool.
+  if (statusCode === 401 || statusCode === 403 || statusCode === 408 || statusCode === 429) {
+    return true;
   }
 
   // All 5xx server errors are retryable
   if (statusCode >= 500) return true;
+
+  // Other 4xx client errors (e.g. 400 bad request, 404 model not found) are non-retryable
+  if (statusCode >= 400 && statusCode < 500) {
+    return false;
+  }
 
   // Network-level errors (no HTTP status code yet)
   return msg.includes('rate limit') || msg.includes('too many requests')
@@ -114,6 +118,7 @@ function isRetryableError(statusCode, errMessage) {
     || msg.includes('econnrefused') || msg.includes('econnreset')
     || msg.includes('fetch failed')
     || msg.includes('unavailable')
+    || msg.includes('permission_denied') || msg.includes('denied access')
     || msg.includes('payment required') || msg.includes('insufficient_quota')
     || msg.includes('insufficient credit') || msg.includes('insufficient balance')
     || msg.includes('empty completion')
