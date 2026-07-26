@@ -129,6 +129,7 @@ export default {
       if (responseHeaders.get("content-type")?.includes("text/event-stream")) {
         responseHeaders.set("Cache-Control", "no-cache, no-transform");
         responseHeaders.set("X-Accel-Buffering", "no");
+        responseHeaders.delete("content-encoding");
       }
       return new Response(response.body, {
         status: response.status,
