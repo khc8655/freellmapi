@@ -784,6 +784,7 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
       res.end(JSON.stringify({ error: { message: `Failed to translate OpenAI request to Gemini format: ${err.message}` } }));
       return;
     }
+  }
 
   headers['Content-Length'] = Buffer.byteLength(finalBodyStr);
 
