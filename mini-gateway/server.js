@@ -685,6 +685,27 @@ function getAvailableModelsList() {
   return models;
 }
 
+const STRIPPED_HEADERS = new Set([
+  'host',
+  'authorization',
+  'content-length',
+  'content-type',
+  'connection',
+  'accept-encoding',
+  'x-cloud-trace-context',
+  'x-forwarded-for',
+  'x-forwarded-proto',
+  'x-forwarded-port',
+  'x-forwarded-server',
+  'x-real-ip',
+  'via',
+  'forwarded',
+  'cf-connecting-ip',
+  'cf-ray',
+  'cf-visitor',
+  'cf-ipcountry'
+]);
+
 // =============================================================================
 // 5. Request Dispatcher with Intelligent Retries & Full Translation
 // =============================================================================
@@ -702,6 +723,20 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
   const headers = { 'Content-Type': 'application/json' };
   if (provider.name !== 'google') {
     headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+
+  // Forward original client headers (User-Agent, x-opencode-*, x-client-*, etc.) while stripping gateway tracing leaks
+  if (req && req.headers) {
+    for (const [key, val] of Object.entries(req.headers)) {
+      if (!STRIPPED_HEADERS.has(key.toLowerCase())) {
+        headers[key] = val;
+      }
+    }
+  }
+
+  // Fallback realistic User-Agent if client didn't provide one
+  if (!headers['user-agent'] && !headers['User-Agent']) {
+    headers['User-Agent'] = 'OpenCode/1.0.0 (Desktop)';
   }
 
   // Rewrite model ID for Nvidia NIM / other mappings
@@ -749,7 +784,8 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
       res.end(JSON.stringify({ error: { message: `Failed to translate OpenAI request to Gemini format: ${err.message}` } }));
       return;
     }
-  }
+
+  headers['Content-Length'] = Buffer.byteLength(finalBodyStr);
 
   const parsedUrl = url.parse(finalUrl);
   const options = {
