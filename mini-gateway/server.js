@@ -25,48 +25,244 @@ try {
 }
 
 // =============================================================================
-// 1. Configurations & Environment Variables
+// 1. Core State & GCP GCS Persistence Module (Zero External Dependencies)
 // =============================================================================
-const GOOGLE_KEYS = (process.env.GOOGLE_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-const NVIDIA_KEYS = (process.env.NVIDIA_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-const CUSTOM_KEYS = (process.env.CUSTOM_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-const OPENCODE_KEYS = (process.env.OPENCODE_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+const PORT = process.env.PORT || 8080;
+const GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'freellmapi-data-store';
+const LOCAL_DATA_DIR = path.join(__dirname, 'data');
 
-const CUSTOM_ENDPOINT = process.env.CUSTOM_ENDPOINT || '';
-const CUSTOM_MODELS = (process.env.CUSTOM_MODELS || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+if (!fs.existsSync(LOCAL_DATA_DIR)) {
+  try { fs.mkdirSync(LOCAL_DATA_DIR, { recursive: true }); } catch (e) {}
+}
 
-// Model mappings to translate client-requested IDs to provider-specific native IDs (e.g. Nvidia NIM)
-const MODEL_MAPPINGS = {
-  'nvidia/glm-5.2': 'z-ai/glm-5.2',
-  'glm-5.2': 'z-ai/glm-5.2'
+let cachedGcpAccessToken = null;
+let gcpTokenExpiresAt = 0;
+
+// Get GCP Application Default Credentials (ADC) access token from Metadata Server
+function getGcpAccessToken() {
+  return new Promise((resolve) => {
+    if (cachedGcpAccessToken && Date.now() < gcpTokenExpiresAt - 60000) {
+      return resolve(cachedGcpAccessToken);
+    }
+    const options = {
+      hostname: 'metadata.google.internal',
+      port: 80,
+      path: '/computeMetadata/v1/instance/service-accounts/default/token',
+      method: 'GET',
+      headers: { 'Metadata-Flavor': 'Google' },
+      timeout: 2000
+    };
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          if (res.statusCode === 200) {
+            const parsed = JSON.parse(data);
+            cachedGcpAccessToken = parsed.access_token;
+            gcpTokenExpiresAt = Date.now() + (parsed.expires_in * 1000);
+            return resolve(cachedGcpAccessToken);
+          }
+        } catch (e) {}
+        resolve(null);
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+// Read JSON from GCS Bucket with local fallback
+async function readGcsJson(objectName, localFallbackFile) {
+  const token = await getGcpAccessToken();
+  if (token) {
+    try {
+      const gcsData = await new Promise((resolve, reject) => {
+        const options = {
+          hostname: 'storage.googleapis.com',
+          port: 443,
+          path: `/storage/v1/b/${GCS_BUCKET_NAME}/o/${encodeURIComponent(objectName)}?alt=media`,
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${token}` }
+        };
+        const req = https.request(options, (res) => {
+          let body = '';
+          res.on('data', c => { body += c; });
+          res.on('end', () => {
+            if (res.statusCode === 200) resolve(body);
+            else reject(new Error(`GCS status ${res.statusCode}`));
+          });
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      return JSON.parse(gcsData);
+    } catch (err) {
+      console.warn(`[GCS] Reading ${objectName} from GCS failed (${err.message}). Falling back to local.`);
+    }
+  }
+  const localPath = path.join(LOCAL_DATA_DIR, localFallbackFile);
+  if (fs.existsSync(localPath)) {
+    try { return JSON.parse(fs.readFileSync(localPath, 'utf-8')); } catch (e) {}
+  }
+  return null;
+}
+
+// Write JSON to GCS Bucket and local disk
+async function writeGcsJson(objectName, localFallbackFile, dataObj) {
+  const jsonStr = JSON.stringify(dataObj, null, 2);
+  const localPath = path.join(LOCAL_DATA_DIR, localFallbackFile);
+  try { fs.writeFileSync(localPath, jsonStr, 'utf-8'); } catch (e) {}
+
+  const token = await getGcpAccessToken();
+  if (token) {
+    try {
+      await new Promise((resolve, reject) => {
+        const options = {
+          hostname: 'storage.googleapis.com',
+          port: 443,
+          path: `/upload/storage/v1/b/${GCS_BUCKET_NAME}/o?uploadType=media&name=${encodeURIComponent(objectName)}`,
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(jsonStr)
+          }
+        };
+        const req = https.request(options, (res) => {
+          if (res.statusCode >= 200 && res.statusCode < 300) resolve(true);
+          else reject(new Error(`GCS write status ${res.statusCode}`));
+        });
+        req.on('error', reject);
+        req.write(jsonStr);
+        req.end();
+      });
+      console.log(`[GCS] Persisted ${objectName} to bucket '${GCS_BUCKET_NAME}'`);
+    } catch (err) {
+      console.warn(`[GCS] Writing ${objectName} to GCS failed: ${err.message}`);
+    }
+  }
+}
+
+// Global Application Configuration & Runtime State
+let appConfig = {
+  accessToken: process.env.ACCESS_TOKEN || '6ammYiLu4F7FuxElG8SSYlpUqYDiBHBuQE3svJOMyVUF1QN3',
+  providers: []
 };
 
-// Users can define the exact model list they want to expose and allow
-const EXPOSED_MODELS = (process.env.EXPOSED_MODELS || '').split(',').map(m => m.trim()).filter(Boolean);
+// Error Logs Storage
+let errorLogs = [];
+const MAX_ERROR_LOGS = 200;
 
-// Access token to protect the proxy
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
-const PORT = process.env.PORT || 7860;
-
-// Key index pointers
-let googleKeyIndex = 0;
-let nvidiaKeyIndex = 0;
-let customKeyIndex = 0;
-let opencodeKeyIndex = 0;
+// Key Rotation Pointers per Provider ID
+const providerKeyPointers = {};
 
 // Statistics
 const stats = {
   totalRequests: 0,
-  googleRequests: 0,
-  nvidiaRequests: 0,
-  customRequests: 0,
   failovers: 0,
   errors: 0,
+  providerStats: {},
   startTime: new Date()
 };
 
+// Initialize default config if none exists
+function buildInitialDefaultConfig() {
+  const googleKeys = (process.env.GOOGLE_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+  const opencodeKeys = (process.env.OPENCODE_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+  const nvidiaKeys = (process.env.NVIDIA_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+
+  return {
+    accessToken: process.env.ACCESS_TOKEN || '6ammYiLu4F7FuxElG8SSYlpUqYDiBHBuQE3svJOMyVUF1QN3',
+    providers: [
+      {
+        id: 'google',
+        name: 'Google AI Studio',
+        type: 'gemini-native',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        apiKeys: googleKeys,
+        models: [
+          { id: 'gemini-3.5-flash-lite', targetModel: 'gemini-3.5-flash-lite' },
+          { id: 'gemini-3.1-flash-lite', targetModel: 'gemini-3.1-flash-lite' },
+          { id: 'gemini-2.5-flash', targetModel: 'gemini-2.5-flash' },
+          { id: 'gemini-2.5-pro', targetModel: 'gemini-2.5-pro' }
+        ]
+      },
+      {
+        id: 'opencode',
+        name: 'OpenCode Zen',
+        type: 'openai-passthrough',
+        baseUrl: 'https://opencode.ai/zen/v1/chat/completions',
+        apiKeys: opencodeKeys,
+        models: [
+          { id: 'deepseek-v4-flash-free', targetModel: 'deepseek-v4-flash-free' },
+          { id: 'mimo-v2.5-free', targetModel: 'mimo-v2.5-free' },
+          { id: 'hy3-free', targetModel: 'hy3-free' }
+        ]
+      },
+      {
+        id: 'nvidia',
+        name: 'Nvidia NIM',
+        type: 'openai-passthrough',
+        baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
+        apiKeys: nvidiaKeys,
+        models: [
+          { id: 'z-ai/glm-5.2', targetModel: 'z-ai/glm-5.2' },
+          { id: 'minimaxai/minimax-m3', targetModel: 'minimaxai/minimax-m3' },
+          { id: 'openai/gpt-oss-120b', targetModel: 'openai/gpt-oss-120b' },
+          { id: 'stepfun-ai/step-3.7-flash', targetModel: 'stepfun-ai/step-3.7-flash' }
+        ]
+      }
+    ]
+  };
+}
+
+// Load System Config & Logs on Startup
+async function initSystemState() {
+  const loadedConfig = await readGcsJson('config.json', 'config.json');
+  if (loadedConfig && Array.isArray(loadedConfig.providers)) {
+    appConfig = loadedConfig;
+    console.log('[System] Config loaded from persistent storage.');
+  } else {
+    appConfig = buildInitialDefaultConfig();
+    console.log('[System] Config initialized from defaults. Saving to GCS...');
+    await writeGcsJson('config.json', 'config.json', appConfig);
+  }
+
+  const loadedLogs = await readGcsJson('error_logs.json', 'error_logs.json');
+  if (Array.isArray(loadedLogs)) {
+    errorLogs = loadedLogs;
+  }
+}
+
+// Save Config to GCS
+async function saveConfig(newConfig) {
+  appConfig = newConfig;
+  await writeGcsJson('config.json', 'config.json', appConfig);
+}
+
+// Record 400/401/403/404/429/5xx Error Logs
+let saveLogsTimeout = null;
+function recordErrorLog(logEntry) {
+  errorLogs.unshift({
+    id: `err_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: new Date().toISOString(),
+    ...logEntry
+  });
+  if (errorLogs.length > MAX_ERROR_LOGS) {
+    errorLogs = errorLogs.slice(0, MAX_ERROR_LOGS);
+  }
+  if (!saveLogsTimeout) {
+    saveLogsTimeout = setTimeout(() => {
+      saveLogsTimeout = null;
+      writeGcsJson('error_logs.json', 'error_logs.json', errorLogs);
+    }, 5000);
+  }
+}
+
 // Thought Signature Cache (Google Gemini tool calling requirements)
-const THOUGHT_SIG_TTL_MS = 30 * 60 * 1000; // 30 mins
+const THOUGHT_SIG_TTL_MS = 30 * 60 * 1000;
 const THOUGHT_SIG_MAX = 5000;
 const thoughtSigCache = new Map();
 
@@ -83,34 +279,19 @@ function recallThoughtSig(callId) {
   if (!callId) return undefined;
   const hit = thoughtSigCache.get(callId);
   if (hit) {
-    if (hit.exp > Date.now()) {
-      return hit.sig;
-    }
+    if (hit.exp > Date.now()) return hit.sig;
     thoughtSigCache.delete(callId);
   }
   return undefined;
 }
 
-// =============================================================================
-// 2. Upstream Error Classification (Adapted from FreeLLMAPI error-classify.ts)
-// =============================================================================
+// Upstream Error Classification for Retries & Key Rotation
 function isRetryableError(statusCode, errMessage) {
   const msg = (errMessage || '').toLowerCase();
-
-  // Key rotation errors: 401 (unauthorized), 403 (forbidden/key blocked), 408 (timeout), and 429 (rate limit)
-  // should trigger key rotation to use other valid keys in the pool.
   if (statusCode === 401 || statusCode === 403 || statusCode === 408 || statusCode === 429) {
     return true;
   }
-
-  // All 5xx server errors are retryable
   if (statusCode >= 500) return true;
-
-  // Other 4xx client errors (e.g. 400 bad request, 404 model not found) are non-retryable
-  if (statusCode >= 400 && statusCode < 500) {
-    return false;
-  }
-
   // Network-level errors (no HTTP status code yet)
   return msg.includes('rate limit') || msg.includes('too many requests')
     || msg.includes('quota') || msg.includes('resource_exhausted')
