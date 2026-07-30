@@ -845,56 +845,51 @@ const STRIPPED_HEADERS = new Set([
 // =============================================================================
 // 5. Request Dispatcher with Intelligent Retries & Full Translation
 // =============================================================================
-async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream = false, model = '') {
-  const keySelector = provider.keySelector;
-  const apiKey = keySelector.getKey();
-  const maxAttempts = keySelector.length;
-
-  console.log(`[Proxy] Forwarding attempt ${attempt}/${maxAttempts} for ${provider.name} (using key index ${provider.name === 'google' ? googleKeyIndex : provider.name === 'nvidia' ? nvidiaKeyIndex : provider.name === 'opencode' ? opencodeKeyIndex : customKeyIndex})`);
-
-  let finalUrl = provider.url;
-  let finalBodyStr = bodyStr;
-  let targetModel = model;
+async function forwardRequest(req, res, provider, bodyData, attempt = 1, isStream = false, requestedModel = '', matchedModel = null) {
+  const providerId = provider.id || provider.name;
+  if (!providerKeyPointers[providerId]) providerKeyPointers[providerId] = 0;
   
+  const keysPool = provider.apiKeys || [];
+  if (keysPool.length === 0) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: `No API keys configured for provider '${provider.name}'` } }));
+    return;
+  }
+
+  const keyIndex = providerKeyPointers[providerId] % keysPool.length;
+  const apiKey = keysPool[keyIndex];
+  const maxAttempts = keysPool.length;
+
+  console.log(`[Proxy] Forwarding attempt ${attempt}/${maxAttempts} for Provider '${provider.name}' (Key Index ${keyIndex}) - Model: ${requestedModel}`);
+
+  const targetModelId = matchedModel?.targetModel || requestedModel;
+  let finalUrl = provider.baseUrl;
+  let finalBodyStr = bodyData;
+
   const headers = { 'Content-Type': 'application/json' };
-  if (provider.name !== 'google') {
+  if (provider.type !== 'gemini-native') {
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  // Forward original client headers (User-Agent, x-opencode-*, x-client-*, etc.) while stripping gateway tracing leaks
+  // Preserving original client User-Agent and custom headers
   if (req && req.headers) {
-    for (const [key, val] of Object.entries(req.headers)) {
-      if (!STRIPPED_HEADERS.has(key.toLowerCase())) {
-        headers[key] = val;
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (!STRIPPED_HEADERS.has(k.toLowerCase())) {
+        headers[k] = v;
       }
     }
   }
-
-  // Fallback realistic User-Agent if client didn't provide one
   if (!headers['user-agent'] && !headers['User-Agent']) {
     headers['User-Agent'] = 'OpenCode/1.0.0 (Desktop)';
   }
 
-  // Rewrite model ID for Nvidia NIM / other mappings
-  if (provider.name === 'nvidia' && MODEL_MAPPINGS[model]) {
-    targetModel = MODEL_MAPPINGS[model];
+  // TYPE A: Gemini Native Adapter
+  if (provider.type === 'gemini-native') {
     try {
-      const bodyObj = JSON.parse(bodyStr);
-      bodyObj.model = targetModel;
-      finalBodyStr = JSON.stringify(bodyObj);
-    } catch (e) {
-      console.error('[Proxy] Failed to rewrite body for Nvidia model:', e.message);
-    }
-  }
-
-  // Google Gemini API Custom Translation
-  if (provider.name === 'google') {
-    try {
-      const openAIObj = JSON.parse(bodyStr);
+      const openAIObj = JSON.parse(bodyData);
       const geminiObj = await toGeminiContents(openAIObj.messages);
       const tools = toGeminiTools(openAIObj.tools);
-
-      const thinkingConfig = buildGeminiThinkingConfig(openAIObj.reasoning_effort, model);
+      const thinkingConfig = buildGeminiThinkingConfig(openAIObj.reasoning_effort, requestedModel);
 
       const requestBody = {
         contents: geminiObj.contents,
@@ -910,15 +905,25 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
       if (geminiObj.systemInstruction) {
         requestBody.systemInstruction = geminiObj.systemInstruction;
       }
-      
+
       finalBodyStr = JSON.stringify(requestBody);
       const action = isStream ? 'streamGenerateContent?alt=sse&key=' : 'generateContent?key=';
-      finalUrl = `${provider.url}/models/${model}:${action}${apiKey}`;
+      finalUrl = `${provider.baseUrl}/models/${targetModelId}:${action}${apiKey}`;
     } catch (err) {
-      console.error('[Proxy] Failed to build native Gemini body:', err.message);
+      console.error('[Proxy] Gemini Body Translation Failed:', err.message);
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: `Failed to translate OpenAI request to Gemini format: ${err.message}` } }));
+      res.end(JSON.stringify({ error: { message: `Gemini Request Translation Failed: ${err.message}` } }));
       return;
+    }
+  } 
+  // TYPE B: Zero-Loss Transparent Passthrough (OpenAI Compatible)
+  else {
+    if (targetModelId !== requestedModel) {
+      try {
+        const bodyObj = JSON.parse(bodyData);
+        bodyObj.model = targetModelId;
+        finalBodyStr = JSON.stringify(bodyObj);
+      } catch (e) {}
     }
   }
 
@@ -931,7 +936,7 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
     path: parsedUrl.path,
     method: 'POST',
     headers: headers,
-    timeout: 45000 // Set a strict 45-second timeout for first-byte response
+    timeout: 45000
   };
 
   let hasResponded = false;
@@ -940,25 +945,31 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
     hasResponded = true;
     const statusCode = upstreamRes.statusCode;
 
-    // Handle Success Response
+    // Handle Success Responses (2xx)
     if (statusCode >= 200 && statusCode < 300) {
       if (isStream) {
-        if (provider.name === 'google') {
-          streamGeminiToOpenAI(upstreamRes, res, model);
-        } else if (targetModel !== model) {
-          streamOpenAIWithModelRewrite(upstreamRes, res, model, targetModel);
+        if (provider.type === 'gemini-native') {
+          streamGeminiToOpenAI(upstreamRes, res, requestedModel);
         } else {
-          res.writeHead(statusCode, upstreamRes.headers);
+          // Zero-loss stream pipe
+          const resHeaders = {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+          };
+          delete resHeaders['content-encoding'];
+          res.writeHead(statusCode, resHeaders);
           upstreamRes.pipe(res);
         }
       } else {
         let resData = '';
         upstreamRes.on('data', chunk => { resData += chunk; });
         upstreamRes.on('end', () => {
-          if (provider.name === 'google') {
+          if (provider.type === 'gemini-native') {
             try {
               const geminiObj = JSON.parse(resData);
-              const openAIObj = translateGeminiResponse(geminiObj, model);
+              const openAIObj = translateGeminiResponse(geminiObj, requestedModel);
               res.writeHead(200, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify(openAIObj));
             } catch (err) {
@@ -967,11 +978,11 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
             }
           } else {
             let finalResData = resData;
-            if (targetModel !== model) {
+            if (targetModelId !== requestedModel) {
               try {
                 const resObj = JSON.parse(resData);
-                if (resObj.model === targetModel) {
-                  resObj.model = model;
+                if (resObj.model === targetModelId) {
+                  resObj.model = requestedModel;
                   finalResData = JSON.stringify(resObj);
                 }
               } catch (e) {}
@@ -984,7 +995,7 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
       return;
     }
 
-    // Handle Upstream Error: buffer body and check if retryable
+    // Handle Upstream Error (4xx, 5xx)
     let errData = '';
     upstreamRes.on('data', chunk => { errData += chunk; });
     upstreamRes.on('end', () => {
@@ -994,13 +1005,25 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
         errMsg = parsed.error?.message || parsed.message || errData;
       } catch (e) {}
 
-      console.warn(`[Proxy] Upstream provider ${provider.name} failed with HTTP ${statusCode}: ${errMsg.slice(0, 200)}`);
+      console.warn(`[Proxy] Upstream provider '${provider.name}' error HTTP ${statusCode}: ${errMsg.slice(0, 200)}`);
+
+      // Log 400/401/403/404/429/5xx Error to Audit Log
+      recordErrorLog({
+        statusCode,
+        model: requestedModel,
+        providerId: provider.id,
+        providerName: provider.name,
+        attempt,
+        keyIndex,
+        errorMessage: errMsg.slice(0, 300),
+        userAgent: req.headers['user-agent'] || 'Unknown'
+      });
 
       if (isRetryableError(statusCode, errMsg) && attempt < maxAttempts) {
-        console.warn(`[Proxy] Error classified as retryable. Rotating key and trying again...`);
+        console.warn(`[Proxy] Retryable error encountered. Rotating key index for ${provider.name}...`);
         stats.failovers++;
-        keySelector.rotate();
-        forwardRequest(req, res, provider, bodyStr, attempt + 1, isStream, model);
+        providerKeyPointers[providerId] = (providerKeyPointers[providerId] + 1) % keysPool.length;
+        forwardRequest(req, res, provider, bodyData, attempt + 1, isStream, requestedModel, matchedModel);
       } else {
         stats.errors++;
         res.writeHead(statusCode, { 'Content-Type': 'application/json' });
@@ -1009,33 +1032,38 @@ async function forwardRequest(req, res, provider, bodyStr, attempt = 1, isStream
     });
   });
 
-  // Handle Timeout
   upstreamReq.on('timeout', () => {
     if (hasResponded) return;
-    console.warn(`[Proxy] Upstream provider ${provider.name} request timed out after 45 seconds.`);
+    console.warn(`[Proxy] Upstream request to ${provider.name} timed out (45s).`);
     upstreamReq.destroy(new Error('Gateway Timeout (45s)'));
   });
 
-  // Clean up upstream connection if the client aborts their request
   req.on('close', () => {
-    if (!hasResponded) {
-      console.log(`[Proxy] Client disconnected early. Aborting upstream request for ${provider.name}.`);
-      upstreamReq.destroy();
-    }
+    if (!hasResponded) upstreamReq.destroy();
   });
 
   upstreamReq.on('error', (err) => {
     console.error(`[Proxy] Connection error to ${provider.name}:`, err.message);
+    recordErrorLog({
+      statusCode: 502,
+      model: requestedModel,
+      providerId: provider.id,
+      providerName: provider.name,
+      attempt,
+      keyIndex,
+      errorMessage: `Connection failed: ${err.message}`,
+      userAgent: req.headers['user-agent'] || 'Unknown'
+    });
+
     if (isRetryableError(500, err.message) && attempt < maxAttempts) {
       stats.failovers++;
-      keySelector.rotate();
-      forwardRequest(req, res, provider, bodyStr, attempt + 1, isStream, model);
+      providerKeyPointers[providerId] = (providerKeyPointers[providerId] + 1) % keysPool.length;
+      forwardRequest(req, res, provider, bodyData, attempt + 1, isStream, requestedModel, matchedModel);
     } else {
       stats.errors++;
-      // Check if headers have already been sent to prevent crash
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: `Bad Gateway: connection failed to upstream provider. ${err.message}` } }));
+        res.end(JSON.stringify({ error: { message: `Bad Gateway: Connection failed to ${provider.name}. ${err.message}` } }));
       }
     }
   });
