@@ -1075,7 +1075,7 @@ async function forwardRequest(req, res, provider, bodyData, attempt = 1, isStrea
 // =============================================================================
 // 5. Dashboard HTML Web UI (Single Page Application)
 // =============================================================================
-function renderDashboardHtml(uptime) {
+function renderDashboardHtml(uptime, host) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1181,7 +1181,7 @@ function renderDashboardHtml(uptime) {
           <h3>📡 接入终端配置说明</h3>
           <p style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.6;">
             在 LobeChat, Cursor, OpenCode, Cline 等客户端中添加 OpenAI 格式接口：<br>
-            • <b>Base URL</b>: <code>https://${req.headers.host || 'your-gateway.run.app'}/v1</code> <br>
+            • <b>Base URL</b>: <code>https://${host || 'your-gateway.run.app'}/v1</code> <br>
             • <b>API Key</b>: <code>填入您设置的 ACCESS_TOKEN</code>
           </p>
         </div>
@@ -1461,7 +1461,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && parsedUrl.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     const uptime = Math.floor((Date.now() - stats.startTime) / 1000);
-    res.end(renderDashboardHtml(uptime));
+    res.end(renderDashboardHtml(uptime, req.headers.host));
     return;
   }
 
