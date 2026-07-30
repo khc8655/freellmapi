@@ -1073,6 +1073,374 @@ async function forwardRequest(req, res, provider, bodyData, attempt = 1, isStrea
 }
 
 // =============================================================================
+// 5. Dashboard HTML Web UI (Single Page Application)
+// =============================================================================
+function renderDashboardHtml(uptime) {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FreeLLMAPI Gateway Cockpit</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #131b2e;
+      --card-border: #1e293b;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --input-bg: #0f172a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    header {
+      background: #0f172a;
+      border-bottom: 1px solid var(--card-border);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logo { font-size: 1.25rem; font-weight: 700; background: linear-gradient(135deg, #6366f1, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .nav-tabs { display: flex; gap: 0.5rem; margin-top: 1rem; border-bottom: 1px solid var(--card-border); padding: 0 2rem; }
+    .tab-btn { background: none; border: none; color: var(--text-muted); padding: 0.75rem 1.25rem; font-size: 0.95rem; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; }
+    .tab-btn.active { color: #fff; border-bottom-color: var(--primary); }
+    main { flex: 1; padding: 2rem; max-width: 1200px; margin: 0 auto; width: 100%; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px; padding: 1.5rem; }
+    .card .label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.4rem; }
+    .card .value { font-size: 1.6rem; font-weight: 700; }
+    .btn { background: var(--primary); color: #fff; border: none; padding: 0.6rem 1.2rem; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+    .btn:hover { background: var(--primary-hover); }
+    .btn-danger { background: var(--danger); }
+    .btn-secondary { background: #334155; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; text-align: left; }
+    th, td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--card-border); font-size: 0.9rem; }
+    th { color: var(--text-muted); font-weight: 600; }
+    input, select, textarea { width: 100%; background: var(--input-bg); border: 1px solid var(--card-border); color: #fff; padding: 0.6rem 0.8rem; border-radius: 6px; font-family: inherit; font-size: 0.9rem; margin-top: 0.4rem; }
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center; z-index: 100; }
+    .modal.active { display: flex; }
+    .modal-content { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px; max-width: 600px; width: 90%; padding: 2rem; max-height: 90vh; overflow-y: auto; }
+    .login-container { max-width: 400px; margin: 5rem auto; text-align: center; }
+    .badge { padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-success { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+    .badge-danger { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+    .badge-warning { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">🚀 FreeLLMAPI Gateway Cockpit</div>
+    <div id="authStatus">
+      <button class="btn btn-secondary" onclick="logout()">退出登录</button>
+    </div>
+  </header>
+
+  <div id="loginView" class="login-container card" style="display: none;">
+    <h2>🔐 管理员身份验证</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem;">请输入后台 ACCESS_TOKEN 访问控制面板</p>
+    <form onsubmit="handleLogin(event)">
+      <input type="password" id="tokenInput" placeholder="输入 ACCESS_TOKEN" required>
+      <button class="btn" style="width: 100%; margin-top: 1.5rem;" type="submit">登录系统</button>
+    </form>
+  </div>
+
+  <div id="mainView" style="display: none;">
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchTab('dashboard')">📊 状态总览</button>
+      <button class="tab-btn" onclick="switchTab('providers')">⚙️ 提供商与 Key 管理</button>
+      <button class="tab-btn" onclick="switchTab('logs')">📝 错误日志审计 (400/429/5xx)</button>
+    </div>
+
+    <main>
+      <!-- TAB 1: DASHBOARD -->
+      <section id="tab-dashboard">
+        <div class="grid">
+          <div class="card"><div class="label">运行时长</div><div class="value" id="statUptime">0h 0m</div></div>
+          <div class="card"><div class="label">累计请求数</div><div class="value" style="color: var(--primary);" id="statTotalReq">0</div></div>
+          <div class="card"><div class="label">自动故障切 Key</div><div class="value" style="color: var(--warning);" id="statFailovers">0</div></div>
+          <div class="card"><div class="label">捕获错误数</div><div class="value" style="color: var(--danger);" id="statErrors">0</div></div>
+        </div>
+
+        <div class="card">
+          <h3>📡 接入终端配置说明</h3>
+          <p style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.6;">
+            在 LobeChat, Cursor, OpenCode, Cline 等客户端中添加 OpenAI 格式接口：<br>
+            • <b>Base URL</b>: <code>https://${req.headers.host || 'your-gateway.run.app'}/v1</code> <br>
+            • <b>API Key</b>: <code>填入您设置的 ACCESS_TOKEN</code>
+          </p>
+        </div>
+      </section>
+
+      <!-- TAB 2: PROVIDERS -->
+      <section id="tab-providers" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h2>提供商与 Key 池管理</h2>
+          <button class="btn" onclick="openAddProviderModal()">+ 添加提供商</button>
+        </div>
+        <div id="providerCardsList"></div>
+      </section>
+
+      <!-- TAB 3: LOGS -->
+      <section id="tab-logs" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h2>错误日志审计 (仅记录 400 / 429 / 5xx)</h2>
+          <button class="btn btn-secondary" onclick="clearLogs()">清空日志</button>
+        </div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>状态码</th>
+                <th>请求模型</th>
+                <th>提供商</th>
+                <th>Key索引</th>
+                <th>错误详细信息截取</th>
+              </tr>
+            </thead>
+            <tbody id="logsTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODAL: ADD/EDIT PROVIDER -->
+  <div class="modal" id="providerModal">
+    <div class="modal-content">
+      <h3 id="modalTitle">添加提供商</h3>
+      <form onsubmit="saveProviderForm(event)">
+        <input type="hidden" id="provId">
+        <div>
+          <label class="label">提供商名称</label>
+          <input type="text" id="provName" required placeholder="如 OpenCode Zen">
+        </div>
+        <div style="margin-top: 1rem;">
+          <label class="label">代理转发类型</label>
+          <select id="provType">
+            <option value="openai-passthrough">标准 OpenAI 协议无损透传 (全特性无缝支持)</option>
+            <option value="gemini-native">Google Gemini 原生 REST 格式转换</option>
+          </select>
+        </div>
+        <div style="margin-top: 1rem;">
+          <label class="label">上游 Base URL 接口地址</label>
+          <input type="text" id="provBaseUrl" required placeholder="如 https://opencode.ai/zen/v1/chat/completions">
+        </div>
+        <div style="margin-top: 1rem;">
+          <label class="label">API Keys 池 (每行一个，自动池化轮换)</label>
+          <textarea id="provKeys" rows="5" required placeholder="sk-key1&#10;sk-key2"></textarea>
+        </div>
+        <div style="margin-top: 1rem;">
+          <label class="label">包含的模型列表 (JSON 格式或逗号分隔)</label>
+          <textarea id="provModels" rows="3" required placeholder="deepseek-v4-flash-free, hy3-free"></textarea>
+        </div>
+        <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1.5rem;">
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button>
+          <button type="submit" class="btn">保存配置</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    let authToken = localStorage.getItem('ACCESS_TOKEN') || '';
+    let currentConfig = { providers: [] };
+
+    function checkAuth() {
+      if (!authToken) {
+        document.getElementById('loginView').style.display = 'block';
+        document.getElementById('mainView').style.display = 'none';
+        document.getElementById('authStatus').style.display = 'none';
+      } else {
+        document.getElementById('loginView').style.display = 'none';
+        document.getElementById('mainView').style.display = 'block';
+        document.getElementById('authStatus').style.display = 'block';
+        fetchData();
+      }
+    }
+
+    function handleLogin(e) {
+      e.preventDefault();
+      authToken = document.getElementById('tokenInput').value.trim();
+      localStorage.setItem('ACCESS_TOKEN', authToken);
+      checkAuth();
+    }
+
+    function logout() {
+      localStorage.removeItem('ACCESS_TOKEN');
+      authToken = '';
+      checkAuth();
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('section[id^="tab-"]').forEach(s => s.style.display = 'none');
+      event.target.classList.add('active');
+      document.getElementById('tab-' + name).style.display = 'block';
+    }
+
+    async function fetchData() {
+      try {
+        const resConfig = await fetch('/api/config', { headers: { 'Authorization': 'Bearer ' + authToken } });
+        if (resConfig.status === 401) return logout();
+        currentConfig = await resConfig.json();
+        renderProviders();
+
+        const resLogs = await fetch('/api/logs', { headers: { 'Authorization': 'Bearer ' + authToken } });
+        const logsData = await resLogs.json();
+        renderLogs(logsData.logs || []);
+        renderStats(logsData.stats || {});
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderStats(s) {
+      document.getElementById('statTotalReq').innerText = s.totalRequests || 0;
+      document.getElementById('statFailovers').innerText = s.failovers || 0;
+      document.getElementById('statErrors').innerText = s.errors || 0;
+      if (s.startTime) {
+        const uptimeSec = Math.floor((Date.now() - new Date(s.startTime).getTime()) / 1000);
+        document.getElementById('statUptime').innerText = \`\${Math.floor(uptimeSec / 3600)}h \${Math.floor((uptimeSec % 3600) / 60)}m\`;
+      }
+    }
+
+    function renderProviders() {
+      const container = document.getElementById('providerCardsList');
+      container.innerHTML = currentConfig.providers.map((p, idx) => \`
+        <div class="card" style="margin-bottom: 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3>\${p.name} <span class="badge \${p.type === 'gemini-native' ? 'badge-warning' : 'badge-success'}">\${p.type}</span></h3>
+            <div>
+              <button class="btn btn-secondary" onclick="editProvider(\${idx})">编辑</button>
+              <button class="btn btn-danger" onclick="deleteProvider(\${idx})">删除</button>
+            </div>
+          </div>
+          <p style="font-family: monospace; font-size: 0.85rem; color: var(--text-muted);">Base URL: \${p.baseUrl}</p>
+          <p><b>Keys 数量</b>: \${(p.apiKeys || []).length} 个池化 Key</p>
+          <div>
+            <b>支持模型</b>: \${(p.models || []).map(m => \`<code style="background: rgba(255,255,255,0.1); padding: 0.2rem 0.4rem; border-radius: 4px; margin-right: 0.4rem;">\${typeof m === 'string' ? m : m.id}</code>\`).join(' ')}
+          </div>
+        </div>
+      \`).join('');
+    }
+
+    function renderLogs(logs) {
+      const tbody = document.getElementById('logsTableBody');
+      tbody.innerHTML = logs.map(l => \`
+        <tr>
+          <td>\${new Date(l.timestamp).toLocaleString()}</td>
+          <td><span class="badge \${l.statusCode >= 500 ? 'badge-danger' : 'badge-warning'}">\${l.statusCode}</span></td>
+          <td><code>\${l.model}</code></td>
+          <td>\${l.providerName || l.providerId}</td>
+          <td>#\${l.keyIndex}</td>
+          <td style="font-family: monospace; font-size: 0.8rem; color: var(--danger);">\${(l.errorMessage || '').slice(0, 150)}</td>
+        </tr>
+      \`).join('');
+    }
+
+    function openAddProviderModal() {
+      document.getElementById('modalTitle').innerText = '添加提供商';
+      document.getElementById('provId').value = '';
+      document.getElementById('provName').value = '';
+      document.getElementById('provType').value = 'openai-passthrough';
+      document.getElementById('provBaseUrl').value = '';
+      document.getElementById('provKeys').value = '';
+      document.getElementById('provModels').value = '';
+      document.getElementById('providerModal').classList.add('active');
+    }
+
+    function editProvider(idx) {
+      const p = currentConfig.providers[idx];
+      document.getElementById('modalTitle').innerText = '编辑提供商';
+      document.getElementById('provId').value = idx;
+      document.getElementById('provName').value = p.name;
+      document.getElementById('provType').value = p.type || 'openai-passthrough';
+      document.getElementById('provBaseUrl').value = p.baseUrl;
+      document.getElementById('provKeys').value = (p.apiKeys || []).join('\\n');
+      document.getElementById('provModels').value = (p.models || []).map(m => typeof m === 'string' ? m : m.id).join(', ');
+      document.getElementById('providerModal').classList.add('active');
+    }
+
+    function closeModal() {
+      document.getElementById('providerModal').classList.remove('active');
+    }
+
+    async function saveProviderForm(e) {
+      e.preventDefault();
+      const idxStr = document.getElementById('provId').value;
+      const keys = document.getElementById('provKeys').value.split('\\n').map(k => k.trim()).filter(Boolean);
+      const modelsStr = document.getElementById('provModels').value;
+      const models = modelsStr.split(',').map(m => m.trim()).filter(Boolean).map(m => ({ id: m, targetModel: m }));
+
+      const providerObj = {
+        id: document.getElementById('provName').value.toLowerCase().replace(/\\s+/g, '-'),
+        name: document.getElementById('provName').value.trim(),
+        type: document.getElementById('provType').value,
+        baseUrl: document.getElementById('provBaseUrl').value.trim(),
+        apiKeys: keys,
+        models: models
+      };
+
+      if (idxStr !== '') {
+        currentConfig.providers[parseInt(idxStr)] = providerObj;
+      } else {
+        currentConfig.providers.push(providerObj);
+      }
+
+      await syncConfig();
+      closeModal();
+      fetchData();
+    }
+
+    async function deleteProvider(idx) {
+      if (!confirm('确定删除该提供商配置？')) return;
+      currentConfig.providers.splice(idx, 1);
+      await syncConfig();
+      fetchData();
+    }
+
+    async function syncConfig() {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+        body: JSON.stringify(currentConfig)
+      });
+    }
+
+    async function clearLogs() {
+      if (!confirm('确定清空所有错误日志？')) return;
+      await fetch('/api/logs/clear', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + authToken }
+      });
+      fetchData();
+    }
+
+    checkAuth();
+    setInterval(fetchData, 10000);
+  </script>
+</body>
+</html>`;
+}
+
+// =============================================================================
 // 6. Router Listener
 // =============================================================================
 const server = http.createServer((req, res) => {
