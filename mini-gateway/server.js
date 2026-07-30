@@ -757,67 +757,41 @@ function streamOpenAIWithModelRewrite(upstreamRes, res, originalModel, targetMod
 // =============================================================================
 // 4. Routing Helper & Model Dictionary
 // =============================================================================
-function selectProvider(modelName) {
-  const model = (modelName || '').toLowerCase();
-  
-  // If EXPOSED_MODELS is configured, restrict routing to only those allowed models
-  if (EXPOSED_MODELS.length > 0) {
-    const isExposed = EXPOSED_MODELS.some(m => m.toLowerCase() === model.toLowerCase());
-    if (!isExposed) return null;
-  }
-  
-  // 1. Google Gemini Routing (Explicit prefix matches)
-  if (model.startsWith('gemini-') && GOOGLE_KEYS.length > 0) {
-    return {
-      name: 'google',
-      url: 'https://generativelanguage.googleapis.com/v1beta',
-      keySelector: {
-        getKey: () => GOOGLE_KEYS[googleKeyIndex],
-        rotate: () => { googleKeyIndex = (googleKeyIndex + 1) % GOOGLE_KEYS.length; },
-        length: GOOGLE_KEYS.length
+function resolveProviderAndModel(requestedModel) {
+  if (!requestedModel) return null;
+  const reqLower = requestedModel.toLowerCase();
+
+  for (const provider of appConfig.providers) {
+    if (!Array.isArray(provider.apiKeys) || provider.apiKeys.length === 0) continue;
+    if (!Array.isArray(provider.models)) continue;
+
+    for (const m of provider.models) {
+      if (typeof m === 'string') {
+        if (m.toLowerCase() === reqLower) {
+          return { provider, matchedModel: { id: m, targetModel: m } };
+        }
+      } else if (m && typeof m === 'object' && m.id) {
+        if (m.id.toLowerCase() === reqLower) {
+          return { provider, matchedModel: m };
+        }
       }
-    };
+    }
   }
-  
-  // 2. Custom Provider Routing (Explicit list only!)
-  if (CUSTOM_ENDPOINT && CUSTOM_KEYS.length > 0 && CUSTOM_MODELS.includes(model)) {
-    return {
-      name: 'custom',
-      url: CUSTOM_ENDPOINT,
-      keySelector: {
-        getKey: () => CUSTOM_KEYS[customKeyIndex],
-        rotate: () => { customKeyIndex = (customKeyIndex + 1) % CUSTOM_KEYS.length; },
-        length: CUSTOM_KEYS.length
-      }
-    };
+
+  // Suffix fallback for *-free models -> OpenCode
+  if (reqLower.endsWith('-free')) {
+    const opencodeProvider = appConfig.providers.find(p => p.id === 'opencode' || p.name.toLowerCase().includes('opencode'));
+    if (opencodeProvider && opencodeProvider.apiKeys.length > 0) {
+      return { provider: opencodeProvider, matchedModel: { id: requestedModel, targetModel: requestedModel } };
+    }
   }
-  
-  // 2.5. OpenCode Routing
-  if (model.endsWith('-free') && OPENCODE_KEYS.length > 0) {
-    return {
-      name: 'opencode',
-      url: 'https://opencode.ai/zen/v1/chat/completions',
-      keySelector: {
-        getKey: () => OPENCODE_KEYS[opencodeKeyIndex],
-        rotate: () => { opencodeKeyIndex = (opencodeKeyIndex + 1) % OPENCODE_KEYS.length; },
-        length: OPENCODE_KEYS.length
-      }
-    };
-  }
-  
-  // 3. Nvidia NIM Routing (Catch-all for all other models if Nvidia keys are set)
-  // Since Gemini is handled explicitly, and Custom is handled by explicit listing,
-  // everything else goes to Nvidia NIM (which hosts all organization-prefixed models like minimaxai/, meta/, z-ai/, microsoft/, qwen/ etc.)
-  if (NVIDIA_KEYS.length > 0) {
-    return {
-      name: 'nvidia',
-      url: 'https://integrate.api.nvidia.com/v1/chat/completions',
-      keySelector: {
-        getKey: () => NVIDIA_KEYS[nvidiaKeyIndex],
-        rotate: () => { nvidiaKeyIndex = (nvidiaKeyIndex + 1) % NVIDIA_KEYS.length; },
-        length: NVIDIA_KEYS.length
-      }
-    };
+
+  // Prefix fallback for gemini-* models -> Google
+  if (reqLower.startsWith('gemini-')) {
+    const googleProvider = appConfig.providers.find(p => p.type === 'gemini-native' || p.id === 'google');
+    if (googleProvider && googleProvider.apiKeys.length > 0) {
+      return { provider: googleProvider, matchedModel: { id: requestedModel, targetModel: requestedModel } };
+    }
   }
 
   return null;
