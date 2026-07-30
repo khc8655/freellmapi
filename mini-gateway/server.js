@@ -1522,7 +1522,90 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 7. Page Not Found Fallback
+  // 4. Admin API - GET /api/config
+  if (req.method === 'GET' && parsedUrl.pathname === '/api/config') {
+    if (appConfig.accessToken) {
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+      if (token !== appConfig.accessToken) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unauthorized' } }));
+        return;
+      }
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(appConfig));
+    return;
+  }
+
+  // 5. Admin API - POST /api/config
+  if (req.method === 'POST' && parsedUrl.pathname === '/api/config') {
+    if (appConfig.accessToken) {
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+      if (token !== appConfig.accessToken) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unauthorized' } }));
+        return;
+      }
+    }
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const newConfig = JSON.parse(body);
+        if (Array.isArray(newConfig.providers)) {
+          appConfig.providers = newConfig.providers;
+        }
+        if (newConfig.accessToken !== undefined) {
+          appConfig.accessToken = newConfig.accessToken;
+        }
+        await writeGcsJson(CONFIG_FILE_NAME, appConfig);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, config: appConfig }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `Invalid config format: ${err.message}` } }));
+      }
+    });
+    return;
+  }
+
+  // 6. Admin API - GET /api/logs
+  if (req.method === 'GET' && parsedUrl.pathname === '/api/logs') {
+    if (appConfig.accessToken) {
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+      if (token !== appConfig.accessToken) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unauthorized' } }));
+        return;
+      }
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ stats, logs: errorLogs }));
+    return;
+  }
+
+  // 7. Admin API - POST /api/logs/clear
+  if (req.method === 'POST' && parsedUrl.pathname === '/api/logs/clear') {
+    if (appConfig.accessToken) {
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+      if (token !== appConfig.accessToken) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Unauthorized' } }));
+        return;
+      }
+    }
+    errorLogs = [];
+    writeGcsJson(LOGS_FILE_NAME, errorLogs);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true }));
+    return;
+  }
+
+  // 8. Page Not Found Fallback
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: { message: `Path ${parsedUrl.pathname} not found.` } }));
 });
