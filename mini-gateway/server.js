@@ -1279,18 +1279,16 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && (parsedUrl.pathname === '/v1/chat/completions' || parsedUrl.pathname === '/chat/completions')) {
     stats.totalRequests++;
 
-    // Auth validation
-    if (ACCESS_TOKEN) {
+    if (appConfig.accessToken) {
       const authHeader = req.headers['authorization'] || '';
       const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-      if (token !== ACCESS_TOKEN) {
+      if (token !== appConfig.accessToken) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'Unauthorized: Invalid access token.', type: 'invalid_request_error' } }));
         return;
       }
     }
 
-    // Buffer Request Body
     let bodyData = '';
     req.on('data', chunk => { bodyData += chunk; });
     req.on('end', () => {
@@ -1303,34 +1301,31 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      const model = bodyObj.model || '';
-      const provider = selectProvider(model);
+      const requestedModel = bodyObj.model || '';
+      const resolved = resolveProviderAndModel(requestedModel);
 
-      if (!provider) {
+      if (!resolved) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: `Model '${model}' is not supported or no keys are configured.`, type: 'invalid_request_error' } }));
+        res.end(JSON.stringify({ error: { message: `Model '${requestedModel}' is not supported or no keys are configured.`, type: 'invalid_request_error' } }));
         return;
       }
 
-      // Update counters
-      if (provider.name === 'google') stats.googleRequests++;
-      else if (provider.name === 'nvidia') stats.nvidiaRequests++;
-      else if (provider.name === 'opencode') stats.customRequests++;
-      else if (provider.name === 'custom') stats.customRequests++;
-
+      const { provider, matchedModel } = resolved;
       const isStream = bodyObj.stream === true;
-      forwardRequest(req, res, provider, bodyData, 1, isStream, model);
+      forwardRequest(req, res, provider, bodyData, 1, isStream, requestedModel, matchedModel);
     });
     return;
   }
 
-  // 4. Page Not Found fallback
+  // 7. Page Not Found Fallback
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: { message: `Path ${parsedUrl.pathname} not found.` } }));
 });
 
-// Server boot
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[Proxy] Gateway server launched on port ${PORT}`);
-  console.log(`[Proxy] Configured Keys - Google: ${GOOGLE_KEYS.length} | Nvidia: ${NVIDIA_KEYS.length} | Custom: ${CUSTOM_KEYS.length}`);
+// Boot System
+initSystemState().then(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`[Proxy] Gateway server launched on port ${PORT}`);
+    console.log(`[Proxy] Loaded ${appConfig.providers.length} provider configuration(s).`);
+  });
 });
