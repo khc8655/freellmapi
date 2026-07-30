@@ -824,45 +824,26 @@ function selectProvider(modelName) {
 }
 
 function getAvailableModelsList() {
-  if (EXPOSED_MODELS.length > 0) {
-    return EXPOSED_MODELS.map(m => {
-      let ownedBy = 'custom';
-      const ml = m.toLowerCase();
-      if (ml.startsWith('gemini-')) ownedBy = 'google';
-      else if (ml.endsWith('-free')) ownedBy = 'opencode';
-      else if (ml.includes('nvidia') || ml.startsWith('meta/') || ml.startsWith('mistralai/') || ml.startsWith('deepseek/') || ml.startsWith('google/')) ownedBy = 'nvidia';
-      return { id: m, object: 'model', created: 1718000000, owned_by: ownedBy };
-    });
-  }
-
   const models = [];
-  if (GOOGLE_KEYS.length > 0) {
-    models.push(
-      { id: 'gemini-1.5-flash', object: 'model', created: 1718000000, owned_by: 'google' },
-      { id: 'gemini-1.5-pro', object: 'model', created: 1718000000, owned_by: 'google' },
-      { id: 'gemini-2.0-flash-exp', object: 'model', created: 1718000000, owned_by: 'google' },
-      { id: 'gemini-2.5-flash', object: 'model', created: 1718000000, owned_by: 'google' },
-      { id: 'gemini-2.5-pro', object: 'model', created: 1718000000, owned_by: 'google' },
-      { id: 'gemini-3.5-flash-lite', object: 'model', created: 1718000000, owned_by: 'google' },
-      { id: 'gemini-3.5-flash', object: 'model', created: 1718000000, owned_by: 'google' }
-    );
+  const addedSet = new Set();
+
+  for (const p of appConfig.providers) {
+    if (!Array.isArray(p.apiKeys) || p.apiKeys.length === 0) continue;
+    if (Array.isArray(p.models)) {
+      p.models.forEach(m => {
+        const id = typeof m === 'string' ? m : m.id;
+        if (id && !addedSet.has(id)) {
+          addedSet.add(id);
+          models.push({
+            id: id,
+            object: 'model',
+            created: 1718000000,
+            owned_by: p.id || p.name.toLowerCase()
+          });
+        }
+      });
+    }
   }
-  if (NVIDIA_KEYS.length > 0) {
-    models.push(
-      { id: 'nvidia/glm-5.2', object: 'model', created: 1718000000, owned_by: 'nvidia' },
-      { id: 'meta/llama-3.3-70b-instruct', object: 'model', created: 1718000000, owned_by: 'nvidia' },
-      { id: 'deepseek/deepseek-r1', object: 'model', created: 1718000000, owned_by: 'nvidia' }
-    );
-  }
-  if (OPENCODE_KEYS.length > 0) {
-    models.push(
-      { id: 'deepseek-v4-flash-free', object: 'model', created: 1718000000, owned_by: 'opencode' },
-      { id: 'hy3-free', object: 'model', created: 1718000000, owned_by: 'opencode' }
-    );
-  }
-  CUSTOM_MODELS.forEach(m => {
-    models.push({ id: m, object: 'model', created: 1718000000, owned_by: 'custom' });
-  });
   return models;
 }
 
