@@ -1287,7 +1287,7 @@ button { font-family: inherit; cursor: pointer; }
   <div class="wrap-section">
     <div class="overview">
       <div class="metrics">
-        <div class="metric"><div class="mlabel">运行时长</div><div class="mval" id="statUptime">0h 0m</div></div>
+        <div class="metric"><div class="mlabel">运行时长</div><div class="mval" id="statUptime">0分 0秒</div></div>
         <div class="metric"><div class="mlabel">累计请求</div><div class="mval" id="statTotalReq">0</div></div>
         <div class="metric warn"><div class="mlabel">故障切换</div><div class="mval" id="statFailovers">0</div></div>
         <div class="metric err"><div class="mlabel">捕获错误</div><div class="mval" id="statErrors">0</div></div>
@@ -1401,7 +1401,9 @@ async function fetchPublicStats() {
     if (res.ok) {
       const data = await res.json();
       const up = data.uptime || 0;
-      document.getElementById('statUptime').innerText = Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm';
+      const mins = Math.floor(up / 60);
+      const secs = up % 60;
+      document.getElementById('statUptime').innerText = mins + '分 ' + secs + '秒';
       document.getElementById('statTotalReq').innerText = data.totalRequests || 0;
       document.getElementById('statFailovers').innerText = data.failovers || 0;
       document.getElementById('statErrors').innerText = data.errors || 0;
@@ -1498,7 +1500,9 @@ function renderStats(s) {
   document.getElementById('statErrors').innerText = s.errors || 0;
   if (s.startTime) {
     const up = Math.floor((Date.now() - new Date(s.startTime).getTime()) / 1000);
-    document.getElementById('statUptime').innerText = Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm';
+    const mins = Math.floor(up / 60);
+    const secs = up % 60;
+    document.getElementById('statUptime').innerText = mins + '分 ' + secs + '秒';
   }
   document.getElementById('baseUrl').innerText = 'https://' + (location.host) + '/v1';
   document.getElementById('apiKeyMask').innerText = maskToken(currentConfig.accessToken);
