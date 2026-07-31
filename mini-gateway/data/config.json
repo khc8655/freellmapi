@@ -1,0 +1,76 @@
+{
+  "accessToken": "6ammYiLu4F7FuxElG8SSYlpUqYDiBHBuQE3svJOMyVUF1QN3",
+  "providers": [
+    {
+      "id": "google",
+      "name": "Google AI Studio",
+      "type": "gemini-native",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "apiKeys": [],
+      "models": [
+        {
+          "id": "gemini-3.5-flash-lite",
+          "targetModel": "gemini-3.5-flash-lite"
+        },
+        {
+          "id": "gemini-3.1-flash-lite",
+          "targetModel": "gemini-3.1-flash-lite"
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "targetModel": "gemini-2.5-flash"
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "targetModel": "gemini-2.5-pro"
+        }
+      ]
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode Zen",
+      "type": "openai-passthrough",
+      "baseUrl": "https://opencode.ai/zen/v1/chat/completions",
+      "apiKeys": [],
+      "models": [
+        {
+          "id": "deepseek-v4-flash-free",
+          "targetModel": "deepseek-v4-flash-free"
+        },
+        {
+          "id": "mimo-v2.5-free",
+          "targetModel": "mimo-v2.5-free"
+        },
+        {
+          "id": "hy3-free",
+          "targetModel": "hy3-free"
+        }
+      ]
+    },
+    {
+      "id": "nvidia",
+      "name": "Nvidia NIM",
+      "type": "openai-passthrough",
+      "baseUrl": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "apiKeys": [],
+      "models": [
+        {
+          "id": "z-ai/glm-5.2",
+          "targetModel": "z-ai/glm-5.2"
+        },
+        {
+          "id": "minimaxai/minimax-m3",
+          "targetModel": "minimaxai/minimax-m3"
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "targetModel": "openai/gpt-oss-120b"
+        },
+        {
+          "id": "stepfun-ai/step-3.7-flash",
+          "targetModel": "stepfun-ai/step-3.7-flash"
+        }
+      ]
+    }
+  ]
+}

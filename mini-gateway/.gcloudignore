@@ -1,0 +1,13 @@
+# Sensitive / local files — never upload to Cloud Build context
+config.md
+.env
+.env.*
+*.local
+data/
+.workbuddy/
+# Repo / OS metadata
+.git
+.gitignore
+.DS_Store
+*.log
+node_modules/

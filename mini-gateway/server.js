@@ -1273,38 +1273,48 @@ button { font-family: inherit; cursor: pointer; }
 </style>
 </head>
 <body>
-<div id="topbar" class="topbar" style="display:none;">
+<body>
+<div id="topbar" class="topbar">
   <div class="brand"><span class="mark">F</span><span>FreeLLMAPI<span class="sub"> Gateway Console</span></span></div>
   <div class="topright">
     <span class="status-pill"><span class="sdot"></span><span id="runState">运行中</span></span>
-    <button class="btn-ghost" onclick="logout()">退出登录</button>
+    <button class="btn-ghost" id="authNavBtn" onclick="toggleAuthAction()">未登录</button>
   </div>
 </div>
 
-<div id="loginView" class="login-wrap" style="display:flex;">
-  <div class="login-card">
-    <div class="mark">F</div>
-    <h2>FreeLLMAPI Gateway</h2>
-    <p>请输入 ACCESS_TOKEN 进入控制台</p>
-    <form onsubmit="handleLogin(event)">
-      <input class="login-input" type="password" id="tokenInput" placeholder="输入 ACCESS_TOKEN" autocomplete="off">
-      <button class="login-btn" type="submit">登录系统</button>
-    </form>
-    <div class="login-hint">Token 仅存放于浏览器本地，用于前端鉴权</div>
+<div class="content">
+  <!-- Public Metrics Bar: Always visible to everyone without login -->
+  <div class="wrap-section">
+    <div class="overview">
+      <div class="metrics">
+        <div class="metric"><div class="mlabel">运行时长</div><div class="mval" id="statUptime">0h 0m</div></div>
+        <div class="metric"><div class="mlabel">累计请求</div><div class="mval" id="statTotalReq">0</div></div>
+        <div class="metric warn"><div class="mlabel">故障切换</div><div class="mval" id="statFailovers">0</div></div>
+        <div class="metric err"><div class="mlabel">捕获错误</div><div class="mval" id="statErrors">0</div></div>
+      </div>
+    </div>
   </div>
-</div>
 
-<div id="mainView" style="display:none;">
-  <div class="content">
-    <div class="wrap-section">
-      <div class="overview">
-        <div class="metrics">
-          <div class="metric"><div class="mlabel">运行时长</div><div class="mval" id="statUptime">0h 0m</div></div>
-          <div class="metric"><div class="mlabel">累计请求</div><div class="mval" id="statTotalReq">0</div></div>
-          <div class="metric warn"><div class="mlabel">故障切换</div><div class="mval" id="statFailovers">0</div></div>
-          <div class="metric err"><div class="mlabel">捕获错误</div><div class="mval" id="statErrors">0</div></div>
-        </div>
-        <div class="access-row">
+  <!-- Login Card: Displayed when unauthenticated below public stats -->
+  <div id="loginView" class="login-wrap" style="display:flex; min-height: initial; padding: 20px 0;">
+    <div class="login-card" style="width: 420px; max-width: 100%;">
+      <div class="mark">F</div>
+      <h2>控制台身份验证</h2>
+      <p>请输入后台 ACCESS_TOKEN 以解锁配置管理与错误日志</p>
+      <form onsubmit="handleLogin(event)">
+        <input class="login-input" type="password" id="tokenInput" placeholder="输入 ACCESS_TOKEN" autocomplete="off" required>
+        <div id="loginError" style="display:none; color: var(--blown-fg); font-size: 13px; margin-top: 10px; text-align: left; background: var(--blown-bg); padding: 8px 12px; border-radius: 6px; border: 1px solid #f8d4d4;"></div>
+        <button class="login-btn" type="submit" id="loginSubmitBtn">验证并登录</button>
+      </form>
+      <div class="login-hint">Token 存放于本地浏览器，密钥由 Cloud Run 安全管理</div>
+    </div>
+  </div>
+
+  <!-- Main View: Protected details & management -->
+  <div id="mainView" style="display:none;">
+    <div class="wrap-section" style="margin-top: 16px;">
+      <div class="overview" style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 22px;">
+        <div class="access-row" style="border-top: none; padding: 0;">
           <div class="access-group">
             <div class="access-item"><span class="alabel">Base URL</span><span class="aval" id="baseUrl">-</span><svg class="copy-ic" onclick="copyText('baseUrl')" viewBox="0 0 14 14" fill="none"><rect x="4.6" y="4.6" width="7.9" height="7.9" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M9.4 2.5H2.6C2.05 2.5 1.6 2.95 1.6 3.5V10.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></div>
             <div class="access-item"><span class="alabel">API Key</span><span class="aval" id="apiKeyMask">-</span><svg class="copy-ic" onclick="copyText('apiKeyMask')" viewBox="0 0 14 14" fill="none"><rect x="4.6" y="4.6" width="7.9" height="7.9" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M9.4 2.5H2.6C2.05 2.5 1.6 2.95 1.6 3.5V10.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></div>
@@ -1385,23 +1395,72 @@ function toast(msg) {
   t.classList.add('show');
   setTimeout(function(){ t.classList.remove('show'); }, 2200);
 }
+async function fetchPublicStats() {
+  try {
+    const res = await fetch('/api/public-stats');
+    if (res.ok) {
+      const data = await res.json();
+      const up = data.uptime || 0;
+      document.getElementById('statUptime').innerText = Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm';
+      document.getElementById('statTotalReq').innerText = data.totalRequests || 0;
+      document.getElementById('statFailovers').innerText = data.failovers || 0;
+      document.getElementById('statErrors').innerText = data.errors || 0;
+    }
+  } catch(e) {}
+}
 function checkAuth() {
+  fetchPublicStats();
   if (!authToken) {
     document.getElementById('loginView').style.display = 'flex';
     document.getElementById('mainView').style.display = 'none';
-    document.getElementById('topbar').style.display = 'none';
+    document.getElementById('authNavBtn').innerText = '未登录';
   } else {
     document.getElementById('loginView').style.display = 'none';
     document.getElementById('mainView').style.display = 'block';
-    document.getElementById('topbar').style.display = 'flex';
+    document.getElementById('authNavBtn').innerText = '退出登录';
     fetchData();
   }
 }
-function handleLogin(e) {
+function toggleAuthAction() {
+  if (authToken) {
+    logout();
+  } else {
+    document.getElementById('tokenInput').focus();
+  }
+}
+async function handleLogin(e) {
   e.preventDefault();
-  authToken = document.getElementById('tokenInput').value.trim();
-  lsSet('ACCESS_TOKEN', authToken);
-  checkAuth();
+  const errEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginSubmitBtn');
+  errEl.style.display = 'none';
+  const inputVal = document.getElementById('tokenInput').value.trim();
+  if (!inputVal) return;
+
+  btn.disabled = true;
+  btn.innerText = '正在验证密钥...';
+
+  try {
+    const res = await fetch('/api/config', {
+      headers: { 'Authorization': 'Bearer ' + encodeURIComponent(inputVal) }
+    });
+    if (res.status === 200) {
+      authToken = inputVal;
+      lsSet('ACCESS_TOKEN', authToken);
+      btn.disabled = false;
+      btn.innerText = '验证并登录';
+      checkAuth();
+    } else {
+      errEl.innerText = '密钥无效！ACCESS_TOKEN 错误，请检查后再试。';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.innerText = '验证并登录';
+    }
+  } catch (err) {
+    errEl.innerText = '网络连接异常，无法完成验证。';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.innerText = '验证并登录';
+  }
 }
 function logout() {
   lsDel('ACCESS_TOKEN');
@@ -1411,10 +1470,14 @@ function logout() {
 async function fetchData() {
   try {
     const [resConfig, resLogs] = await Promise.all([
-      fetch('/api/config', { headers: { 'Authorization': 'Bearer ' + authToken } }),
-      fetch('/api/logs', { headers: { 'Authorization': 'Bearer ' + authToken } })
+      fetch('/api/config', { headers: { 'Authorization': 'Bearer ' + encodeURIComponent(authToken) } }),
+      fetch('/api/logs', { headers: { 'Authorization': 'Bearer ' + encodeURIComponent(authToken) } })
     ]);
-    if (resConfig.status === 401 || resLogs.status === 401) { toast('ACCESS_TOKEN 错误，请重试'); logout(); return; }
+    if (resConfig.status === 401 || resLogs.status === 401) {
+      toast('ACCESS_TOKEN 错误，已自动注销');
+      logout();
+      return;
+    }
     currentConfig = await resConfig.json();
     const logsData = await resLogs.json();
     allLogs = logsData.logs || [];
@@ -1708,6 +1771,21 @@ const server = http.createServer((req, res) => {
       const isStream = bodyObj.stream === true;
       forwardRequest(req, res, provider, bodyData, 1, isStream, requestedModel, matchedModel);
     });
+    return;
+  }
+
+  // 3.5. Public Stats API (No authentication required)
+  if (req.method === 'GET' && parsedUrl.pathname === '/api/public-stats') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const uptimeSec = Math.floor((Date.now() - stats.startTime.getTime()) / 1000);
+    res.end(JSON.stringify({
+      status: 'ok',
+      uptime: uptimeSec,
+      totalRequests: stats.totalRequests,
+      failovers: stats.failovers,
+      errors: stats.errors,
+      startTime: stats.startTime
+    }));
     return;
   }
 
