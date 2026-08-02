@@ -1006,7 +1006,7 @@ async function forwardRequest(req, res, provider, bodyData, attempt = 1, isStrea
     method: 'POST',
     headers: headers,
     servername: parsedUrl.hostname,
-    agent: false,
+    agent: provider.keepAlive ? undefined : false,
     timeout: 45000
   };
 
@@ -1368,6 +1368,7 @@ button { font-family: inherit; cursor: pointer; }
       <div class="form-row"><label>提供商名称</label><input type="text" id="provName" required placeholder="如 OpenCode Zen"></div>
       <div class="form-row"><label>代理转发类型</label><select id="provType"><option value="openai-passthrough">OpenAI 兼容（无损透传）</option><option value="gemini-native">Google Gemini 原生转换</option></select></div>
       <div class="form-row"><label>上游 Base URL</label><input type="text" id="provBaseUrl" required placeholder="https://opencode.ai/zen/v1/chat/completions"></div>
+      <div class="form-row"><label>Socket 连接池 (Keep-Alive)</label><select id="provKeepAlive"><option value="false">关闭连接池 (默认推荐: 单次建连，100% 防断连)</option><option value="true">开启连接池 (连接复用，适合高频微服务)</option></select></div>
       <div class="form-row"><label>API Keys 池（每行一个，自动轮换）</label><textarea id="provKeys" rows="5" required placeholder="sk-key1&#10;sk-key2"></textarea></div>
       <div class="form-row"><label>模型列表（逗号分隔）</label><textarea id="provModels" rows="3" required placeholder="deepseek-v4-flash-free, hy3-free"></textarea></div>
       <div class="modal-actions"><button type="button" class="btn-ghost" onclick="closeModal()">取消</button><button type="submit" class="btn-primary">保存配置</button></div>
@@ -1629,6 +1630,7 @@ function openAddProviderModal() {
   document.getElementById('provName').value = '';
   document.getElementById('provType').value = 'openai-passthrough';
   document.getElementById('provBaseUrl').value = '';
+  document.getElementById('provKeepAlive').value = 'false';
   document.getElementById('provKeys').value = '';
   document.getElementById('provModels').value = '';
   document.getElementById('providerModal').classList.add('active');
@@ -1640,6 +1642,7 @@ function editProvider(idx) {
   document.getElementById('provName').value = p.name;
   document.getElementById('provType').value = p.type || 'openai-passthrough';
   document.getElementById('provBaseUrl').value = p.baseUrl;
+  document.getElementById('provKeepAlive').value = p.keepAlive ? 'true' : 'false';
   document.getElementById('provKeys').value = (p.apiKeys || []).join('\\n');
   document.getElementById('provModels').value = (p.models || []).map(function(m){ return typeof m === 'string' ? m : m.id; }).join(', ');
   document.getElementById('providerModal').classList.add('active');
@@ -1656,6 +1659,7 @@ async function saveProviderForm(e) {
     name: document.getElementById('provName').value.trim(),
     type: document.getElementById('provType').value,
     baseUrl: document.getElementById('provBaseUrl').value.trim(),
+    keepAlive: document.getElementById('provKeepAlive').value === 'true',
     apiKeys: keys,
     models: models
   };
