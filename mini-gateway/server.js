@@ -372,7 +372,8 @@ function isRetryableError(statusCode, errMessage) {
     || msg.includes('insufficient credit') || msg.includes('insufficient balance')
     || msg.includes('empty completion')
     || msg.includes('stream ended unexpectedly')
-    || msg.includes('stream stalled');
+    || msg.includes('stream stalled')
+    || msg.includes('socket hang up');
 }
 
 // =============================================================================
@@ -1004,6 +1005,7 @@ async function forwardRequest(req, res, provider, bodyData, attempt = 1, isStrea
     path: parsedUrl.path,
     method: 'POST',
     headers: headers,
+    servername: parsedUrl.hostname,
     timeout: 45000
   };
 
