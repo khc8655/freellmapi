@@ -1006,6 +1006,7 @@ async function forwardRequest(req, res, provider, bodyData, attempt = 1, isStrea
     method: 'POST',
     headers: headers,
     servername: parsedUrl.hostname,
+    agent: false,
     timeout: 45000
   };
 
@@ -1078,24 +1079,23 @@ async function forwardRequest(req, res, provider, bodyData, attempt = 1, isStrea
 
       console.warn(`[Proxy] Upstream provider '${provider.name}' error HTTP ${statusCode}: ${errMsg.slice(0, 200)}`);
 
-      // Log 400/401/403/404/429/5xx Error to Audit Log
-      recordErrorLog({
-        statusCode,
-        model: requestedModel,
-        providerId: providerId,
-        providerName: provider.name,
-        attempt,
-        keyIndex,
-        errorMessage: errMsg.slice(0, 300),
-        userAgent: req.headers['user-agent'] || 'Unknown'
-      });
-
       if (isRetryableError(statusCode, errMsg) && attempt < maxAttempts) {
         console.warn(`[Proxy] Retryable error encountered. Rotating key index for ${provider.name}...`);
         stats.failovers++;
         providerKeyPointers[providerId] = (providerKeyPointers[providerId] + 1) % keysPool.length;
         forwardRequest(req, res, provider, bodyData, attempt + 1, isStream, requestedModel, matchedModel);
       } else {
+        // Record log and mark key fail only if non-retryable or max attempts exhausted
+        recordErrorLog({
+          statusCode,
+          model: requestedModel,
+          providerId: providerId,
+          providerName: provider.name,
+          attempt,
+          keyIndex,
+          errorMessage: errMsg.slice(0, 300),
+          userAgent: req.headers['user-agent'] || 'Unknown'
+        });
         stats.errors++;
         res.writeHead(statusCode, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: `Provider error (${provider.name}): ${errMsg}`, status: statusCode } }));
@@ -1114,23 +1114,23 @@ async function forwardRequest(req, res, provider, bodyData, attempt = 1, isStrea
   });
 
   upstreamReq.on('error', (err) => {
-    console.error(`[Proxy] Connection error to ${provider.name}:`, err.message);
-    recordErrorLog({
-      statusCode: 502,
-      model: requestedModel,
-      providerId: providerId,
-      providerName: provider.name,
-      attempt,
-      keyIndex,
-      errorMessage: `Connection failed: ${err.message}`,
-      userAgent: req.headers['user-agent'] || 'Unknown'
-    });
+    console.error(`[Proxy] Connection error to ${provider.name} (attempt ${attempt}/${maxAttempts}):`, err.message);
 
     if (isRetryableError(500, err.message) && attempt < maxAttempts) {
       stats.failovers++;
       providerKeyPointers[providerId] = (providerKeyPointers[providerId] + 1) % keysPool.length;
       forwardRequest(req, res, provider, bodyData, attempt + 1, isStream, requestedModel, matchedModel);
     } else {
+      recordErrorLog({
+        statusCode: 502,
+        model: requestedModel,
+        providerId: providerId,
+        providerName: provider.name,
+        attempt,
+        keyIndex,
+        errorMessage: `Connection failed: ${err.message}`,
+        userAgent: req.headers['user-agent'] || 'Unknown'
+      });
       stats.errors++;
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
